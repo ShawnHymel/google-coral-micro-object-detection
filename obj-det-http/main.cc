@@ -41,6 +41,7 @@
 #include "libs/tpu/edgetpu_op.h"
 #include "third_party/freertos_kernel/include/FreeRTOS.h"
 #include "third_party/freertos_kernel/include/task.h"
+#include "third_party/freertos_kernel/include/semphr.h"
 #include "third_party/tflite-micro/tensorflow/lite/micro/micro_error_reporter.h"
 #include "third_party/tflite-micro/tensorflow/lite/micro/micro_interpreter.h"
 #include "third_party/tflite-micro/tensorflow/lite/micro/micro_mutable_op_resolver.h"
@@ -48,20 +49,51 @@
 namespace coralmicro {
 namespace {
 
+// Globals
 constexpr char kIndexFileName[] = "/coral_micro_camera.html";
 constexpr char kCameraStreamUrlPrefix[] = "/camera_stream";
 constexpr char kModelPath[] =
     "/models/tf2_ssd_mobilenet_v2_coco17_ptq_edgetpu.tflite";
 constexpr int kTensorArenaSize = 8 * 1024 * 1024;
 STATIC_TENSOR_ARENA_IN_SDRAM(tensor_arena, kTensorArenaSize);
+static std::vector<uint8_t> *img_ptr;
+static SemaphoreHandle_t img_mutex;
+static unsigned int img_width;
+static unsigned int img_height;
+
+/*******************************************************************************
+* Functions
+*/
 
 // Handle HTTP requests
 HttpServer::Content UriHandler(const char* uri) {
+
+  // Give client main page
   if (StrEndsWith(uri, "index.shtml") ||
       StrEndsWith(uri, "coral_micro_camera.html")) {
     return std::string(kIndexFileName);
+
+  // Give client compressed image data
   } else if (StrEndsWith(uri, kCameraStreamUrlPrefix)) {
+
     return {};
+
+    // printf("Req recvd\r\n");
+    
+    // // Read image from shared memory and compress to JPG
+    // std::vector<uint8_t> jpeg;
+    // if (xSemaphoreTake(img_mutex, portMAX_DELAY) == pdTRUE) {
+    //   JpegCompressRgb(
+    //     img_ptr->data(), 
+    //     img_width, 
+    //     img_height, 
+    //     75,         // Quality
+    //     &jpeg
+    //   );
+    //   xSemaphoreGive(img_mutex);
+    // }
+
+    // return jpeg;
 
     // // [start-snippet:jpeg]
     // std::vector<uint8_t> buf(CameraTask::kWidth * CameraTask::kHeight *
@@ -85,7 +117,9 @@ HttpServer::Content UriHandler(const char* uri) {
   return {};
 }
 
-// Capture image and perform inference
+/**
+* Capture image and perform inference
+*/
 bool DetectFromCamera(
   tflite::MicroInterpreter* interpreter, 
   int model_width,
@@ -114,8 +148,11 @@ bool DetectFromCamera(
   };
 
   // Get frame from camera using the configuration we set (~38 ms)
-  if (!CameraTask::GetSingleton()->GetFrame({fmt})) {
-    return false;
+  if (xSemaphoreTake(img_mutex, portMAX_DELAY) == pdTRUE) {
+    if (!CameraTask::GetSingleton()->GetFrame({fmt})) {
+      return false;
+    }
+    xSemaphoreGive(img_mutex);
   }
 
   // Copy image to input tensor (~6 ms)
@@ -136,7 +173,9 @@ bool DetectFromCamera(
   return true;
 }
 
-// Loop forever taking images from the camera and performing inference
+/**
+ * Loop forever taking images from the camera and performing inference
+ */
 [[noreturn]] void InferenceTask(void* param) {
 
   // Used for calculating FPS
@@ -185,25 +224,30 @@ bool DetectFromCamera(
     vTaskSuspend(nullptr);
   }
 
+  // Configure model inputs and outputs
+  auto* input_tensor = interpreter.input_tensor(0);
+  img_height = input_tensor->dims->data[1];
+  img_width = input_tensor->dims->data[2];
+  img_ptr = new std::vector<uint8>(img_height * img_width * 
+    CameraFormatBpp(CameraFormat::kRgb));
+  std::vector<tensorflow::Object> results;
+
   // Do forever
   while (true) {
-
-    // Configure model inputs and outputs
-    auto* input_tensor = interpreter.input_tensor(0);
-    int model_height = input_tensor->dims->data[1];
-    int model_width = input_tensor->dims->data[2];
-    std::vector<uint8> image(model_height * model_width *
-                            CameraFormatBpp(CameraFormat::kRgb));
-    std::vector<tensorflow::Object> results;
-
+    
     // Calculate time between inferences
     timestamp = xTaskGetTickCount() * (1000 / configTICK_RATE_HZ);
     dtime = timestamp - timestamp_prev;
     timestamp_prev = timestamp;
 
     // Get image and perform inference
-    if (DetectFromCamera(&interpreter, model_width, model_height, &results,
-                        &image)) {
+    printf("Taking photo...\r\n");
+    if (DetectFromCamera(&interpreter, 
+      img_width, 
+      img_height, 
+      &results, 
+      img_ptr)
+    ) {
       std::string output = "bboxes | dtime: " + std::to_string(dtime) + "\r\n";
       for (const auto& object : results) {
         output += "  id: " + std::to_string(object.id) +
@@ -221,23 +265,42 @@ bool DetectFromCamera(
   }
 }
 
-void Main() {
+/**
+* Blink error codes
+*/
+void Blink(unsigned int num, unsigned int delay_ms) {
 
-  // Blink for 3 sec while waiting for serial to connect
   auto user_led = coralmicro::Led::kUser;
   auto led_type = static_cast<coralmicro::Led*>(&user_led);
   bool on = false;
-  for (int i = 0; i < 6; i++) {
+
+  // Blink number of times specified with given delay
+  for (unsigned int i = 0; i < num * 2; i++) {
     on = !on;
     coralmicro::LedSet(*led_type, on);
-    printf("Waiting... ");
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
   }
-  printf("\r\n");
-  
+}
+
+/*******************************************************************************
+* Main
+*/
+
+void Main() {
+
   // Say hello
+  Blink(3, 500);
   printf("Object detection inference and HTTP server over USB\r\n");
   LedSet(Led::kStatus, true);
+
+  // Initialize mutex
+  img_mutex = xSemaphoreCreateMutex();
+  if (img_mutex == NULL) {
+    printf("Error creating mutex\r\n");
+    while (true) {
+      Blink(2, 100);
+    }
+  }
 
   // Initialize camera
   CameraTask::GetSingleton()->SetPower(true);
@@ -249,16 +312,18 @@ void Main() {
     printf("Serving on: http://%s\r\n", usb_ip.c_str());
   }
 
-  // Initialize HTTP server (attach request handler)
-  HttpServer http_server;
-  http_server.AddUriHandler(UriHandler);
-  UseHttpServer(&http_server);
+  // TODO: Why is this crashing the board???
+  // // Initialize HTTP server (attach request handler)
+  // HttpServer http_server;
+  // http_server.AddUriHandler(UriHandler);
+  // UseHttpServer(&http_server);
 
   // Start capture and inference task
+  printf("Starting inference task\r\n");
   xTaskCreate(
     &InferenceTask,
     "InferenceTask",
-    configMINIMAL_STACK_SIZE * 10,
+    configMINIMAL_STACK_SIZE * 30,
     nullptr,
     kAppTaskPriority,
     nullptr
@@ -271,6 +336,9 @@ void Main() {
 }  // namespace
 }  // namespace coralmicro
 
+/**
+* Entrypoint
+*/
 extern "C" void app_main(void* param) {
   (void)param;
   coralmicro::Main();
