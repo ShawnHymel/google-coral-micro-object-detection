@@ -1,3 +1,72 @@
+// #include "libs/base/http_server.h"
+
+// #include "libs/base/led.h"
+// #include "libs/base/strings.h"
+// #include "libs/base/tasks.h"
+// #include "libs/base/utils.h"
+// #include "third_party/freertos_kernel/include/FreeRTOS.h"
+// #include "third_party/freertos_kernel/include/task.h"
+
+// namespace coralmicro {
+// namespace {
+
+// HttpServer::Content UriHandler(const char* path) {
+//   printf("Request received for %s\r\n", path);
+//   std::vector<uint8_t> html;
+//   html.reserve(64);
+//   if (std::strcmp(path, "/hello.html") == 0) {
+//     printf("Hello World!\r\n");
+//     StrAppend(&html, "<html><body>Hello World!</body></html>");
+//     return html;
+//   }
+//   return {};
+// }
+
+// [[noreturn]] void blink_task(void* param) {
+//   auto led_type = static_cast<Led*>(param);
+//   printf("Hello task.\r\n");
+//   bool on = true;
+//   while (true) {
+//     on = !on;
+//     LedSet(*led_type, on);
+//     vTaskDelay(pdMS_TO_TICKS(500));
+//   }
+// }
+
+// void Main() {
+//   printf("HTTP Server Example!\r\n");
+//   // Turn on Status LED to show the board is on.
+//   LedSet(Led::kStatus, true);
+
+//   auto user_led = Led::kUser;
+//   xTaskCreate(&blink_task, "blink_user_led_task", configMINIMAL_STACK_SIZE,
+//               &user_led, kAppTaskPriority, nullptr);
+
+//   printf("Starting server...\r\n");
+//   HttpServer http_server;
+//   http_server.AddUriHandler(UriHandler);
+//   UseHttpServer(&http_server);
+
+//   std::string ip;
+//   if (GetUsbIpAddress(&ip)) {
+//     printf("GO TO:   http://%s/%s\r\n", ip.c_str(), "hello.html");
+//   }
+//   vTaskSuspend(nullptr);
+// }
+
+// }  // namespace
+// }  // namespace coralmicro
+
+// extern "C" void app_main(void* param) {
+//   (void)param;
+//   coralmicro::Main();
+//   vTaskSuspend(nullptr);void Blink(unsigned int num, unsigned int delay_ms) {
+
+
+
+
+
+
 /**
 * Object Detection with HTTP server over USB
 *
@@ -65,6 +134,8 @@ static unsigned int img_height;
 * Functions
 */
 
+void Blink(unsigned int num, unsigned int delay_ms);
+
 // Handle HTTP requests
 HttpServer::Content UriHandler(const char* uri) {
 
@@ -75,44 +146,22 @@ HttpServer::Content UriHandler(const char* uri) {
 
   // Give client compressed image data
   } else if (StrEndsWith(uri, kCameraStreamUrlPrefix)) {
-
-    return {};
-
-    // printf("Req recvd\r\n");
     
-    // // Read image from shared memory and compress to JPG
-    // std::vector<uint8_t> jpeg;
-    // if (xSemaphoreTake(img_mutex, portMAX_DELAY) == pdTRUE) {
-    //   JpegCompressRgb(
-    //     img_ptr->data(), 
-    //     img_width, 
-    //     img_height, 
-    //     75,         // Quality
-    //     &jpeg
-    //   );
-    //   xSemaphoreGive(img_mutex);
-    // }
+    // TODO: we're sending some weird interlaced RGB/BGR crap here. What's going on?
+    // Read image from shared memory and compress to JPG
+    std::vector<uint8_t> jpeg;
+    if (xSemaphoreTake(img_mutex, portMAX_DELAY) == pdTRUE) {
+      JpegCompressRgb(
+        img_ptr->data(), 
+        img_width, 
+        img_height, 
+        75,         // Quality
+        &jpeg
+      );
+      xSemaphoreGive(img_mutex);
+    }
 
-    // return jpeg;
-
-    // // [start-snippet:jpeg]
-    // std::vector<uint8_t> buf(CameraTask::kWidth * CameraTask::kHeight *
-    //                          CameraFormatBpp(CameraFormat::kRgb));
-    // auto fmt = CameraFrameFormat{
-    //     CameraFormat::kRgb,       CameraFilterMethod::kBilinear,
-    //     CameraRotation::k0,       CameraTask::kWidth,
-    //     CameraTask::kHeight,
-    //     /*preserve_ratio=*/false, buf.data(),
-    //     /*while_balance=*/true};
-    // if (!CameraTask::GetSingleton()->GetFrame({fmt})) {
-    //   printf("Unable to get frame from camera\r\n");
-    //   return {};
-    // }
-
-    // std::vector<uint8_t> jpeg;
-    // JpegCompressRgb(buf.data(), fmt.width, fmt.height, /*quality=*/75, &jpeg);
-    // // [end-snippet:jpeg]
-    // return jpeg;
+    return jpeg;
   }
   return {};
 }
@@ -131,6 +180,9 @@ bool DetectFromCamera(
   // Make sure memory has been allocated for results and image
   CHECK(results != nullptr);
   CHECK(image != nullptr);
+
+  // Turn status LED on to let the user know we're taking a photo
+  LedSet(Led::kUser, true);
 
   // Get pointer to input tensor buffer
   auto* input_tensor = interpreter->input_tensor(0);
@@ -154,6 +206,9 @@ bool DetectFromCamera(
     }
     xSemaphoreGive(img_mutex);
   }
+
+  // Turn status LED off to let the user know we're done taking a photo
+  LedSet(Led::kUser, false);
 
   // Copy image to input tensor (~6 ms)
   std::memcpy(
@@ -259,6 +314,7 @@ bool DetectFromCamera(
           "\r\n";
       }
       printf("%s", output.c_str());
+
     } else {
       printf("Failed to detect image from camera.\r\n");
     }
@@ -266,18 +322,13 @@ bool DetectFromCamera(
 }
 
 /**
-* Blink error codes
+* Blink error codes on the status LED
 */
 void Blink(unsigned int num, unsigned int delay_ms) {
-
-  auto user_led = coralmicro::Led::kUser;
-  auto led_type = static_cast<coralmicro::Led*>(&user_led);
-  bool on = false;
-
-  // Blink number of times specified with given delay
+  static bool on = false;
   for (unsigned int i = 0; i < num * 2; i++) {
     on = !on;
-    coralmicro::LedSet(*led_type, on);
+    coralmicro::LedSet(Led::kStatus, on);
     vTaskDelay(pdMS_TO_TICKS(delay_ms));
   }
 }
@@ -291,7 +342,6 @@ void Main() {
   // Say hello
   Blink(3, 500);
   printf("Object detection inference and HTTP server over USB\r\n");
-  LedSet(Led::kStatus, true);
 
   // Initialize mutex
   img_mutex = xSemaphoreCreateMutex();
@@ -306,18 +356,6 @@ void Main() {
   CameraTask::GetSingleton()->SetPower(true);
   CameraTask::GetSingleton()->Enable(CameraMode::kStreaming);
 
-  // Initialize IP over USB
-  std::string usb_ip;
-  if (GetUsbIpAddress(&usb_ip)) {
-    printf("Serving on: http://%s\r\n", usb_ip.c_str());
-  }
-
-  // TODO: Why is this crashing the board???
-  // // Initialize HTTP server (attach request handler)
-  // HttpServer http_server;
-  // http_server.AddUriHandler(UriHandler);
-  // UseHttpServer(&http_server);
-
   // Start capture and inference task
   printf("Starting inference task\r\n");
   xTaskCreate(
@@ -328,6 +366,17 @@ void Main() {
     kAppTaskPriority,
     nullptr
   );
+
+  // Initialize IP over USB
+  std::string usb_ip;
+  if (GetUsbIpAddress(&usb_ip)) {
+    printf("Serving on: http://%s\r\n", usb_ip.c_str());
+  }
+
+  // Initialize HTTP server (attach request handler)
+  HttpServer http_server;
+  http_server.AddUriHandler(UriHandler);
+  UseHttpServer(&http_server);
 
   // Main will go to sleep
   vTaskSuspend(nullptr);
