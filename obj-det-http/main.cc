@@ -63,6 +63,11 @@ static SemaphoreHandle_t img_mutex;
 static int img_width;
 static int img_height;
 
+// Copy of image data for HTTP server
+#if ENABLE_HTTP_SERVER
+static std::vector<uint8_t> *img_copy;
+#endif
+
 /*******************************************************************************
  * Functions
  */
@@ -88,7 +93,7 @@ HttpServer::Content UriHandler(const char* uri) {
     std::vector<uint8_t> jpeg;
     if (xSemaphoreTake(img_mutex, portMAX_DELAY) == pdTRUE) {
       JpegCompressRgb(
-        img_ptr->data(), 
+        img_copy->data(), 
         img_width, 
         img_height, 
         75,         // Quality
@@ -161,6 +166,9 @@ HttpServer::Content UriHandler(const char* uri) {
   img_ptr = new std::vector<uint8>(img_height * img_width * 
     CameraFormatBpp(CameraFormat::kRgb));
   std::vector<tensorflow::Object> results;
+#if ENABLE_HTTP_SERVER
+    img_copy = new std::vector<uint8_t>(img_ptr->size());
+#endif
 
   // Do forever
   while (true) {
@@ -203,25 +211,28 @@ HttpServer::Content UriHandler(const char* uri) {
         img_ptr->data(),
         img_ptr->size()
       );
+      
+      // Perform inference (~65 ms)
+      if (interpreter.Invoke() != kTfLiteOk) {
+        printf("ERROR: Inference failed\r\n");
+        continue;
+      }
+    
+      // Get object detection results (as a vector of Objects)
+      results = tensorflow::GetDetectionResults(&interpreter, 0.6, 5);
+      
+      // Copy image to separate buffer for HTTP server
+#if ENABLE_HTTP_SERVER
+      std::memcpy(
+        img_copy->data(),
+        img_ptr->data(),
+        img_ptr->size()
+      );
+#endif
 
       // Unlock critical section
       xSemaphoreGive(img_mutex);
     }
-
-    // TODO: It's running inference that causes the weird RGB/BGR swap. WTF.
-    // TODO: Maybe try copying image to a separate buffer to put on web page?
-    // TODO: Also, we need to do image scaling. Things to try:
-    //        - Does changing image w/h on camera init crop or scale?
-    //        - Try nearest-neighbor instead of bilinear...does that affect speed?
-    //        - If those don't work, import EI scaling method from their lib
-    // Perform inference (~65 ms)
-    if (interpreter.Invoke() != kTfLiteOk) {
-      printf("ERROR: Inference failed\r\n");
-      continue;
-    }
-    
-    // Get object detection results (as a vector of Objects)
-    results = tensorflow::GetDetectionResults(&interpreter, 0.6, 5);
 
     // Print bounding box results
     std::string output = "bboxes | dtime: " + std::to_string(dtime) + "\r\n";
@@ -235,6 +246,9 @@ HttpServer::Content UriHandler(const char* uri) {
         "\r\n";
     }
     printf("%s", output.c_str());
+
+    // Sleep to let other tasks run
+    // vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
@@ -273,6 +287,9 @@ void Main() {
   CameraTask::GetSingleton()->SetPower(true);
   CameraTask::GetSingleton()->Enable(CameraMode::kStreaming);
 
+  // q: what is the value of kAppTaskPriority?
+  // a: 5
+
   // Start capture and inference task
   printf("Starting inference task\r\n");
   xTaskCreate(
@@ -280,7 +297,7 @@ void Main() {
     "InferenceTask",
     configMINIMAL_STACK_SIZE * 30,
     nullptr,
-    kAppTaskPriority,
+    kAppTaskPriority - 1, // Console is same priority as app, so make lower
     nullptr
   );
 
