@@ -51,17 +51,26 @@
 namespace coralmicro {
 namespace {
 
+// Struct
+typedef struct {
+  std::string info;
+  std::vector<uint8_t> *jpeg;
+} ImgResult;
+
 // Globals
 constexpr char kIndexFileName[] = "/coral_micro_camera.html";
 constexpr char kCameraStreamUrlPrefix[] = "/camera_stream";
+constexpr char kBoundingBoxPrefix[] = "/bboxes";
 constexpr char kModelPath[] =
     "/models/tf2_ssd_mobilenet_v2_coco17_ptq_edgetpu.tflite";
 constexpr int kTensorArenaSize = 8 * 1024 * 1024;
 STATIC_TENSOR_ARENA_IN_SDRAM(tensor_arena, kTensorArenaSize);
 static std::vector<uint8_t> *img_ptr;
 static SemaphoreHandle_t img_mutex;
+static SemaphoreHandle_t bbox_mutex;
 static int img_width;
 static int img_height;
+static std::string bbox_json = "{}";
 
 // Copy of image data for HTTP server
 #if ENABLE_HTTP_SERVER
@@ -88,7 +97,6 @@ HttpServer::Content UriHandler(const char* uri) {
   // Give client compressed image data
   } else if (StrEndsWith(uri, kCameraStreamUrlPrefix)) {
     
-    // TODO: we're sending some weird interlaced RGB/BGR crap here. What's going on?
     // Read image from shared memory and compress to JPG
     std::vector<uint8_t> jpeg;
     if (xSemaphoreTake(img_mutex, portMAX_DELAY) == pdTRUE) {
@@ -103,7 +111,26 @@ HttpServer::Content UriHandler(const char* uri) {
     }
 
     return jpeg;
+
+  // Give client bounding box info
+  } else if (StrEndsWith(uri, kBoundingBoxPrefix)) {
+
+    // Read bounding box info from shared memory
+    std::string bbox_info_copy = "{}";
+    if (xSemaphoreTake(bbox_mutex, portMAX_DELAY) == pdTRUE) {
+      bbox_info_copy = bbox_json;
+      xSemaphoreGive(bbox_mutex);
+    }
+    
+    // Convert to vector of bytes
+    std::vector<uint8_t> bbox_info_bytes(
+      bbox_info_copy.begin(), 
+      bbox_info_copy.end()
+    );
+
+    return bbox_info_bytes;
   }
+
   return {};
 }
 #endif
@@ -234,18 +261,24 @@ HttpServer::Content UriHandler(const char* uri) {
       xSemaphoreGive(img_mutex);
     }
 
-    // Print bounding box results
-    std::string output = "bboxes | dtime: " + std::to_string(dtime) + "\r\n";
-    for (const auto& object : results) {
-      output += "  id: " + std::to_string(object.id) +
-        " | score: " + std::to_string(object.score) + 
-        " | xmin: " + std::to_string(object.bbox.xmin) +
-        " | ymin: " + std::to_string(object.bbox.ymin) +
-        " | xmax: " + std::to_string(object.bbox.xmax) +
-        " | ymin: " + std::to_string(object.bbox.ymax) + 
-        "\r\n";
+    // Convert results into json string
+    if (xSemaphoreTake(bbox_mutex, portMAX_DELAY) == pdTRUE) {
+      bbox_json = "{\"dtime:\" " + std::to_string(dtime) + ", ";
+      bbox_json += "\"bboxes:\" [";
+      for (const auto& object : results) {
+        bbox_json += "{\"id\": " + std::to_string(object.id) + ", ";
+        bbox_json += "\"score\": " + std::to_string(object.score) + ", ";
+        bbox_json += "\"xmin\": " + std::to_string(object.bbox.xmin) + ", ";
+        bbox_json += "\"ymin\": " + std::to_string(object.bbox.ymin) + ", ";
+        bbox_json += "\"xmax\": " + std::to_string(object.bbox.xmax) + ", ";
+        bbox_json += "\"ymax\": " + std::to_string(object.bbox.ymax) + "}, ";
+      }
+      bbox_json += "]}";
+      xSemaphoreGive(bbox_mutex);
     }
-    printf("%s", output.c_str());
+
+    // Print bounding box results
+    printf("%s\r\n", bbox_json.c_str());
 
     // Sleep to let other tasks run
     // vTaskDelay(pdMS_TO_TICKS(10));
@@ -274,10 +307,19 @@ void Main() {
   Blink(3, 500);
   printf("Object detection inference and HTTP server over USB\r\n");
 
-  // Initialize mutex
+  // Initialize image mutex
   img_mutex = xSemaphoreCreateMutex();
   if (img_mutex == NULL) {
-    printf("Error creating mutex\r\n");
+    printf("Error creating image mutex\r\n");
+    while (true) {
+      Blink(2, 100);
+    }
+  }
+
+  // Initialize bounding box mutex
+  bbox_mutex = xSemaphoreCreateMutex();
+  if (bbox_mutex == NULL) {
+    printf("Error creating bbox mutex\r\n");
     while (true) {
       Blink(2, 100);
     }
@@ -286,9 +328,6 @@ void Main() {
   // Initialize camera
   CameraTask::GetSingleton()->SetPower(true);
   CameraTask::GetSingleton()->Enable(CameraMode::kStreaming);
-
-  // q: what is the value of kAppTaskPriority?
-  // a: 5
 
   // Start capture and inference task
   printf("Starting inference task\r\n");

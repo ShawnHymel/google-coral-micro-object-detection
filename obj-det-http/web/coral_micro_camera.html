@@ -21,6 +21,7 @@
     <script type="text/javascript">
         // Coral Micro's image url.
         const imgUrl = "/camera_stream";
+        const bboxUrl = "/bboxes";
         // Sleeps for micro seconds.
         function sleep (micro) {
             return new Promise((resolve) => setTimeout(resolve, micro));
@@ -29,6 +30,8 @@
         async function updateImage () {
             const imgReader = new FileReader();
             while (1) {
+
+                // Get image from Coral Micro
                 fetch(imgUrl)
                     .then((resp) => { return resp.blob(); })
                     .then((imageBlob) => {
@@ -45,6 +48,38 @@
                     .catch((reason => {
                         console.error("Error while fetching image: " + reason.toString());
                     }));
+
+                // Get bounding box information from Coral Micro
+                fetch(bboxUrl)
+                    .then((resp) => {
+                        return resp.text();
+                    })
+                    .then((bboxes) => {
+                        console.log(bboxes);
+                    })
+                    .catch((error) => {
+                        console.error("Error while fetching bounding boxes: " + error);
+                        // let imgElt = document.getElementById("coral-micro-camera-image")
+                        // let canvas = document.createElement('canvas');
+                        // canvas.width = imgElt.width;
+                        // canvas.height = imgElt.height;
+                        // let ctx = canvas.getContext('2d');
+                        // ctx.drawImage(imgElt, 0, 0, imgElt.width, imgElt.height);
+                        // ctx.lineWidth = 2;
+                        // ctx.strokeStyle = '#53bfc1';
+                        // ctx.font = '20px Arial';
+                        // ctx.fillStyle = '#53bfc1';
+                        // for (let i = 0; i < bboxes.length; i++) {
+                        //     let bbox = bboxes[i];
+                        //     ctx.beginPath();
+                        //     ctx.rect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]);
+                        //     ctx.stroke();
+                        //     ctx.fillText(bbox[4], bbox[0], bbox[1] - 5);
+                        // }
+                        // imgElt.src = canvas.toDataURL();
+                    });
+
+                // Wait before fetching new image
                 await sleep(100);
             }
         }
