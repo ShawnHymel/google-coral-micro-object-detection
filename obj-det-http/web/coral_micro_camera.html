@@ -30,54 +30,105 @@
         async function updateImage () {
             const imgReader = new FileReader();
             while (1) {
-
                 // Get image from Coral Micro
                 fetch(imgUrl)
                     .then((resp) => { return resp.blob(); })
                     .then((imageBlob) => {
                         imgReader.readAsDataURL(imageBlob);
+
+                        // Draw image and bounding boxes on the canvas
                         imgReader.onloadend = () => {
-                            let imgElt = document.getElementById("coral-micro-camera-image")
-                            imgElt.src = imgReader.result;
-                            imgElt.width = document.getElementById("image-width").value;
-                            imgElt.height = document.getElementById("image-height").value;
-                            let rotation = document.getElementById("image-rotation").value;
-                            imgElt.style.transform = 'rotate(' + rotation.toString() + 'deg)';
+                            let imgElt = document.getElementById("cam_canvas");
+                            let ctx = imgElt.getContext('2d');
+                            let img = new Image();
+                            img.onload = function () {
+                                ctx.drawImage(img, 0, 0, imgElt.width, imgElt.height);
+                                ctx.lineWidth = 2;
+                                ctx.strokeStyle = '#53bfc1';
+                                ctx.font = '20px Arial';
+                                ctx.fillStyle = '#53bfc1';
+                                ctx.beginPath();
+                                ctx.rect(imgElt.width / 2 - 50, imgElt.height / 2 - 50, 100, 100);
+                                ctx.stroke();
+                                ctx.fillText("Center", imgElt.width / 2 - 50, imgElt.height / 2 - 50 - 5);
+                            };
+                            img.src = imgReader.result;
                         };
+
+                        // imgReader.onloadend = () => {
+
+
+                            // let imgElt = document.getElementById("coral-micro-camera-image");
+                            // imgElt.src = imgReader.result;
+                            // imgElt.width = document.getElementById("image-width").value;
+                            // imgElt.height = document.getElementById("image-height").value;
+                            // let rotation = document.getElementById("image-rotation").value;
+                            // imgElt.style.transform = 'rotate(' + rotation.toString() + 'deg)';
+
+                            // // Draw a red square in the middle of the image
+                            // let canvas = document.createElement('canvas');
+                            // canvas.width = imgElt.width;
+                            // canvas.height = imgElt.height;
+                            // let ctx = canvas.getContext('2d');
+                            // ctx.drawImage(imgElt, 0, 0, imgElt.width, imgElt.height);
+                            // ctx.lineWidth = 2;
+                            // ctx.strokeStyle = '#53bfc1';
+                            // ctx.font = '20px Arial';
+                            // ctx.fillStyle = '#53bfc1';
+                            // ctx.beginPath();
+                            // ctx.rect(imgElt.width / 2 - 50, imgElt.height / 2 - 50, 100, 100);
+                            // ctx.stroke();
+                            // ctx.fillText("Center", imgElt.width / 2 - 50, imgElt.height / 2 - 50 - 5);
+                            // imgElt.src = canvas.toDataURL();
+
+
+                            // // Draw bounding boxes on the image
+                            // let canvas = document.createElement('canvas');
+                            // canvas.width = imgElt.width;
+                            // canvas.height = imgElt.height;
+                            // let ctx = canvas.getContext('2d');
+                            // ctx.drawImage(imgElt, 0, 0, imgElt.width, imgElt.height);
+                            // ctx.lineWidth = 2;
+                            // ctx.strokeStyle = '#53bfc1';
+                            // ctx.font = '20px Arial';
+                            // ctx.fillStyle = '#53bfc1';
+
+                            // // Get bounding box information from Coral Micro
+                            // fetch(bboxUrl)
+                            //     .then((resp) => {
+                            //         return resp.text();
+                            //     })
+                            //     .then((bbox_resp) => {
+                            //         // Decode the bounding box information as json
+                            //         bbox_resp = JSON.parse(bbox_resp);
+                            //         console.log(bbox_resp);
+                            //         bboxes = bbox_resp.bboxes;
+
+                            //         // Draw a red square in the middle of the image
+                            //         ctx.beginPath();
+                            //         ctx.rect(imgElt.width / 2 - 50, imgElt.height / 2 - 50, 100, 100);
+                            //         ctx.stroke();
+                            //         ctx.fillText("Center", imgElt.width / 2 - 50, imgElt.height / 2 - 50 - 5);
+
+                            //         // Draw bounding boxes on the image
+                            //         for (let i = 0; i < bboxes.length; i++) {
+                            //             let bbox = bboxes[i];
+                            //             ctx.beginPath();
+                            //             ctx.rect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]);
+                            //             ctx.stroke();
+                            //             ctx.fillText(bbox[4], bbox[0], bbox[1] - 5);
+                            //         }
+
+                            //         imgElt.src = canvas.toDataURL();
+                            //     })
+                            //     .catch((error) => {
+                            //         console.error("Error while fetching bounding boxes: " + error);
+                            //     });
+                        // };
                     })
                     .catch((reason => {
                         console.error("Error while fetching image: " + reason.toString());
                     }));
-
-                // Get bounding box information from Coral Micro
-                fetch(bboxUrl)
-                    .then((resp) => {
-                        return resp.text();
-                    })
-                    .then((bboxes) => {
-                        console.log(bboxes);
-                    })
-                    .catch((error) => {
-                        console.error("Error while fetching bounding boxes: " + error);
-                        // let imgElt = document.getElementById("coral-micro-camera-image")
-                        // let canvas = document.createElement('canvas');
-                        // canvas.width = imgElt.width;
-                        // canvas.height = imgElt.height;
-                        // let ctx = canvas.getContext('2d');
-                        // ctx.drawImage(imgElt, 0, 0, imgElt.width, imgElt.height);
-                        // ctx.lineWidth = 2;
-                        // ctx.strokeStyle = '#53bfc1';
-                        // ctx.font = '20px Arial';
-                        // ctx.fillStyle = '#53bfc1';
-                        // for (let i = 0; i < bboxes.length; i++) {
-                        //     let bbox = bboxes[i];
-                        //     ctx.beginPath();
-                        //     ctx.rect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]);
-                        //     ctx.stroke();
-                        //     ctx.fillText(bbox[4], bbox[0], bbox[1] - 5);
-                        // }
-                        // imgElt.src = canvas.toDataURL();
-                    });
 
                 // Wait before fetching new image
                 await sleep(100);
@@ -105,12 +156,6 @@
             display: inline-block;
             color: #f5d0cb;
             padding-left: 10px;
-        }
-        #coral-micro-camera-image {
-            display: block;
-            margin-left: auto;
-            margin-right: auto;
-            border-top: 1px solid #53bfc1;
         }
         #setting-menu {
             height: 50px;
@@ -141,9 +186,7 @@
             <option value=270>270</option>
         </select>
     </div>
-    <img id="coral-micro-camera-image"
-         src="https://picsum.photos/200/300"
-         alt="Image cannot be displayed">
+    <canvas id="cam_canvas" width="500" height="500"></canvas>
 </div>
 </body>
 </html>

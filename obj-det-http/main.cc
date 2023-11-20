@@ -121,7 +121,7 @@ HttpServer::Content UriHandler(const char* uri) {
       bbox_info_copy = bbox_json;
       xSemaphoreGive(bbox_mutex);
     }
-    
+
     // Convert to vector of bytes
     std::vector<uint8_t> bbox_info_bytes(
       bbox_info_copy.begin(), 
@@ -263,15 +263,18 @@ HttpServer::Content UriHandler(const char* uri) {
 
     // Convert results into json string
     if (xSemaphoreTake(bbox_mutex, portMAX_DELAY) == pdTRUE) {
-      bbox_json = "{\"dtime:\" " + std::to_string(dtime) + ", ";
-      bbox_json += "\"bboxes:\" [";
+      bbox_json = "{\"dtime\": " + std::to_string(dtime) + ", ";
+      bbox_json += "\"bboxes\": [";
       for (const auto& object : results) {
         bbox_json += "{\"id\": " + std::to_string(object.id) + ", ";
         bbox_json += "\"score\": " + std::to_string(object.score) + ", ";
         bbox_json += "\"xmin\": " + std::to_string(object.bbox.xmin) + ", ";
         bbox_json += "\"ymin\": " + std::to_string(object.bbox.ymin) + ", ";
         bbox_json += "\"xmax\": " + std::to_string(object.bbox.xmax) + ", ";
-        bbox_json += "\"ymax\": " + std::to_string(object.bbox.ymax) + "}, ";
+        bbox_json += "\"ymax\": " + std::to_string(object.bbox.ymax) + "}";
+        if (&object != &results.back()) {
+          bbox_json += ", ";
+        }
       }
       bbox_json += "]}";
       xSemaphoreGive(bbox_mutex);
