@@ -70,7 +70,10 @@ static SemaphoreHandle_t img_mutex;
 static SemaphoreHandle_t bbox_mutex;
 static int img_width;
 static int img_height;
-static char *bbox_json;
+static constexpr float bbox_threshold = 0.6;
+static constexpr int max_bboxes = 5;
+static constexpr unsigned int bbox_buf_size = 100 + (max_bboxes * 200) + 1;
+static char bbox_buf[bbox_buf_size];
 
 // Copy of image data for HTTP server
 #if ENABLE_HTTP_SERVER
@@ -115,20 +118,23 @@ HttpServer::Content UriHandler(const char* uri) {
   // Give client bounding box info
   } else if (StrEndsWith(uri, kBoundingBoxPrefix)) {
 
-    // Read bounding box info from shared memory
-    std::string bbox_info_copy;
+    printf("BBox request received\r\n");
+
+    // Read bounding box info from shared memory and convert to vector of bytes
+    char bbox_info_copy[bbox_buf_size];
+    std::vector<uint8_t> bbox_info_bytes;
     if (xSemaphoreTake(bbox_mutex, portMAX_DELAY) == pdTRUE) {
-      bbox_info_copy = std::string(bbox_json);
+      std::strcpy(bbox_info_copy, bbox_buf);
+      bbox_info_bytes.assign(
+        bbox_info_copy, 
+        bbox_info_copy + std::strlen(bbox_info_copy)
+      );
       xSemaphoreGive(bbox_mutex);
     }
 
-    printf("bbox_info_copy: %s\r\n", bbox_info_copy.c_str());
-
-    // Convert to vector of bytes
-    std::vector<uint8_t> bbox_info_bytes(
-      bbox_info_copy.begin(), 
-      bbox_info_copy.end()
-    );
+    printf("bbox_info_copy: %s\r\n", bbox_info_copy);
+    printf("bbox_info_copy length: %d\r\n", std::strlen(bbox_info_copy));
+    printf("bbox_info_bytes.size(): %d\r\n", bbox_info_bytes.size());
 
     return bbox_info_bytes;
   }
@@ -240,7 +246,7 @@ HttpServer::Content UriHandler(const char* uri) {
         img_ptr->data(),
         img_ptr->size()
       );
-      
+
       // Perform inference (~65 ms)
       if (interpreter.Invoke() != kTfLiteOk) {
         printf("ERROR: Inference failed\r\n");
@@ -248,7 +254,7 @@ HttpServer::Content UriHandler(const char* uri) {
       }
     
       // Get object detection results (as a vector of Objects)
-      results = tensorflow::GetDetectionResults(&interpreter, 0.6, 5);
+      results = tensorflow::GetDetectionResults(&interpreter, bbox_threshold, max_bboxes);
       
       // Copy image to separate buffer for HTTP server
 #if ENABLE_HTTP_SERVER
@@ -268,8 +274,6 @@ HttpServer::Content UriHandler(const char* uri) {
     // TEST Create a fake JSON string to transmitting the bbox info
     // bbox_json = "{\"dtime\": 12345, \"bboxes\": [{\"id\": 1, \"score\": 0.5, \"xmin\": 0.1, \"ymin\": 0.2, \"xmax\": 0.3, \"ymax\": 0.4}]}";
 
-
-
     // Convert results into json string
     std::string bbox_string = "{\"dtime\": " + std::to_string(dtime) + ", ";
       bbox_string += "\"bboxes\": [";
@@ -286,16 +290,20 @@ HttpServer::Content UriHandler(const char* uri) {
       }
       bbox_string += "]}";
 
+    // Check length of JSON string
+    if (bbox_string.length() > bbox_buf_size) {
+      printf("ERROR: Bounding box JSON string too long\r\n");
+      continue;
+    }
 
     // Convert global char array
     if (xSemaphoreTake(bbox_mutex, portMAX_DELAY) == pdTRUE) {
-      bbox_json = new char[bbox_string.length() + 1];
-      std::strcpy(bbox_json, bbox_string.c_str());
+      std::strcpy(bbox_buf, bbox_string.c_str());
       xSemaphoreGive(bbox_mutex);
     }
 
     // Print bounding box JSON
-    printf("%s\r\n", bbox_json);
+    printf("%s\r\n", bbox_buf);
 
     // Sleep to let other tasks run
     // vTaskDelay(pdMS_TO_TICKS(10));
@@ -353,7 +361,7 @@ void Main() {
     "InferenceTask",
     configMINIMAL_STACK_SIZE * 30,
     nullptr,
-    kAppTaskPriority - 1, // Console is same priority as app, so make lower
+    kAppTaskPriority - 1, // Console and server are same priority as app, so make inference lower
     nullptr
   );
 

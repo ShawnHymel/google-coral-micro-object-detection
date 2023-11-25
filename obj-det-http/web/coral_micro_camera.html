@@ -72,54 +72,45 @@
                 startTime = Date.now();
                 console.log("--------------------");
 
-                // Fetch image and bounding boxes in parallel
-                const [imageBlob, bboxResp] = await Promise.all([
-                    fetch(imgUrl)
-                        .then(resp => resp.blob()),
-                    fetch(bboxUrl)
-                        .then(resp => {
-                            console.log("0 Timestamp: ", Date.now() - startTime);
-                            return resp.text();
-                        })
-                        .then((bboxText) => {
+                // Fetch image and bbox info
+                let bboxInfo = null;
+                let imageBlob = null;
+                try {
 
-                            console.log("1 Timestamp: ", Date.now() - startTime);
+                    console.log("0 Timestamp: ", Date.now() - startTime);
 
-                            // Print the length of bbox response
-                            console.log("bboxText length: ", bboxText.length);
+                    // Fetch bbox info and wait for it to complete
+                    const bboxResponse = await fetch(bboxUrl);
+                    const bboxStr = await bboxResponse.text();
 
-                            // Check if response is ASCII
-                            if (!isASCII(bboxText)) {
-                                console.log("Response is not ASCII");
-                                return { bboxes: [] };
-                            }
+                    console.log("1 Timestamp: ", Date.now() - startTime);
 
-                            console.log("2 Timestamp: ", Date.now() - startTime);
+                    console.log("bboxStr: ", bboxStr);
+                    bboxInfo = JSON.parse(bboxStr);
+                    console.log("bboxInfo: ", bboxInfo);
+                    console.log("2 Timestamp: ", Date.now() - startTime);
 
-                            // Attempt to parse JSON
-                            try {
-                                return JSON.parse(bboxText);
-                            } catch (error) {
-                                console.log("Error parsing JSON: " + error);
-                                return { bboxes: [] };
-                            }
-                        })
-                        .catch((error) => {
-                            console.error("Error in fetching or parsing bounding boxes: ", error);
-                            return { bboxes: [] };
-                        })
-                ]);
+                    // Fetch image data and wait for it to complete
+                    const imageResponse = await fetch(imgUrl);
+                    imageBlob = await imageResponse.blob();
+
+                    console.log("3 Timestamp: ", Date.now() - startTime);
+
+                } catch (error) {
+                    console.error("Error in fetching bbox or image: ", error);
+                    continue;
+                }
 
                 // Handle errors
-                if (!imageBlob || !bboxResp) {
+                if (!imageBlob || !bboxInfo) {
                     console.error("Error fetching data");
                     continue;
                 }
 
-                console.log("3 Timestamp: ", Date.now() - startTime);
+                console.log("4 Timestamp: ", Date.now() - startTime);
 
                 // Log bounding boxes
-                console.log(bboxResp);
+                console.log(bboxInfo);
 
                 // Draw image and bounding boxes
                 imgReader.readAsDataURL(imageBlob);
@@ -127,17 +118,17 @@
                     img.onload = () => {
                         ctx.clearRect(0, 0, imgElt.width, imgElt.height);
                         ctx.drawImage(img, 0, 0, imgElt.width, imgElt.height);
-                        if (bboxResp.bboxes) {
-                            drawBoundingBoxes(ctx, bboxResp.bboxes, imgElt);
+                        if (bboxInfo.bboxes) {
+                            drawBoundingBoxes(ctx, bboxInfo.bboxes, imgElt);
                         }
                     }
                     img.src = imgReader.result;
                 }
 
-                console.log("4 Timestamp: ", Date.now() - startTime);
+                console.log("5 Timestamp: ", Date.now() - startTime);
 
                 // Wait before fetching new image
-                await sleep(100);
+                await sleep(10);
             }
         }
 
