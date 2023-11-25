@@ -19,153 +19,128 @@
     <meta charset="UTF-8">
     <title>Coral Micro Cam HTTP</title>
     <script type="text/javascript">
-        // Coral Micro's image url.
-        const imgUrl = "/camera_stream";
-        const bboxUrl = "/bboxes";
+
+        // TEST
+        const imgUrl = "http://10.10.10.1/camera_stream";
+        const bboxUrl = "http://10.10.10.1/bboxes";
+
+        // // Coral Micro's image url.
+        // const imgUrl = "/camera_stream";
+        // const bboxUrl = "/bboxes";
+
+        function isASCII(str) {
+            return /^[\x00-\x7F]*$/.test(str);
+}
+
         // Sleeps for micro seconds.
         function sleep (micro) {
             return new Promise((resolve) => setTimeout(resolve, micro));
         }
-        // Main loop that updates the img tag.
+
+        // Draws bounding boxes on the canvas
+        function drawBoundingBoxes(ctx, bboxes, imgElt) {
+            bboxes.forEach(bbox => {
+                let xmin = Math.max(bbox['xmin'] * imgElt.width, 0);
+                let ymin = Math.max(bbox['ymin'] * imgElt.height, 0);
+                let xmax = Math.min(bbox['xmax'] * imgElt.width, imgElt.width);
+                let ymax = Math.min(bbox['ymax'] * imgElt.height, imgElt.height);
+
+                // Draw box on the canvas
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#ff0000';
+                ctx.font = '20px Arial';
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.rect(xmin, ymin, xmax - xmin, ymax - ymin);
+                ctx.stroke();
+                ctx.fillText(bbox['id'], xmin, ymin - 5);
+            });
+        }
+        
+        // Main loop to fetch image and bounding boxes and draw them on the canvas
         async function updateImage () {
             const imgReader = new FileReader();
+            const imgElt = document.getElementById("cam_canvas");
+            const ctx = imgElt.getContext('2d');
+            let img = new Image();
+
+            let startTime = Date.now();
+
+            // Do this forever
             while (1) {
-                // Get image and bounding boxesfrom Coral Micro
-                fetch(bboxUrl)
-                    .then((resp) => {
-                        return resp.text();
-                    })
-                    .then((bbox_resp) => {
-                        bbox_resp = JSON.parse(bbox_resp);
-                        console.log(bbox_resp);
-                        return bbox_resp; // return bbox_resp so it can be used in the next .then() block
-                    })
-                    .catch((error) => {
-                        console.error("Error while fetching bounding boxes: " + error);
-                    })
-                    .then((bbox_resp) => { // add a new .then() block to receive bbox_resp
-                        fetch("/camera_stream")
-                            .then((resp) => {
-                                return resp.blob();
-                            })
-                            .then((imageBlob) => {
-                                // Draw image and bounding boxes on the canvas
-                                imgReader.readAsDataURL(imageBlob);
-                                imgReader.onloadend = () => {
-                                    let imgElt = document.getElementById("cam_canvas");
-                                    let ctx = imgElt.getContext('2d');
-                                    let img = new Image();
 
-                                    // Draw image on the canvas
-                                    img.onload = function () {
-                                        ctx.drawImage(img, 0, 0, imgElt.width, imgElt.height);
+                startTime = Date.now();
+                console.log("--------------------");
 
-                                        // TODO: These aren't really drawing the bounding boxes correctly
-                                        // Go through all bounding boxes and draw them on the canvas
-                                        let bboxes = bbox_resp.bboxes;
-                                        for (let i = 0; i < bboxes.length; i++) {
+                // Fetch image and bounding boxes in parallel
+                const [imageBlob, bboxResp] = await Promise.all([
+                    fetch(imgUrl)
+                        .then(resp => resp.blob()),
+                    fetch(bboxUrl)
+                        .then(resp => {
+                            console.log("0 Timestamp: ", Date.now() - startTime);
+                            return resp.text();
+                        })
+                        .then((bboxText) => {
 
-                                            // Get bounding box dimensions in pixels
-                                            let bbox = bboxes[i];
-                                            let xmin = Math.max(bbox['xmin'] * imgElt.width, 0);
-                                            let ymin = Math.max(bbox['ymin'] * imgElt.height, 0);
-                                            let xmax = Math.min(bbox['xmax'] * imgElt.width, imgElt.width);
-                                            let ymax = Math.min(bbox['ymax'] * imgElt.height, imgElt.height);
-                                            
-                                            // Draw box on the canvas
-                                            ctx.lineWidth = 2;
-                                            ctx.strokeStyle = '#53bfc1';
-                                            ctx.font = '20px Arial';
-                                            ctx.fillStyle = '#53bfc1';
-                                            ctx.beginPath();
-                                            ctx.rect(xmin, ymin, xmax - xmin, ymax - ymin);
-                                            ctx.stroke();
-                                            ctx.fillText(bbox['id'], xmin, ymin - 5);
-                                        }
-                                    }
-                                    img.src = imgReader.result;
-                                }
-                            })
-                            .catch((error) => {
-                                console.error("Error while fetching image: " + error);
-                            });
-                    });
+                            console.log("1 Timestamp: ", Date.now() - startTime);
 
-                        // imgReader.onloadend = () => {
+                            // Print the length of bbox response
+                            console.log("bboxText length: ", bboxText.length);
 
+                            // Check if response is ASCII
+                            if (!isASCII(bboxText)) {
+                                console.log("Response is not ASCII");
+                                return { bboxes: [] };
+                            }
 
-                            // let imgElt = document.getElementById("coral-micro-camera-image");
-                            // imgElt.src = imgReader.result;
-                            // imgElt.width = document.getElementById("image-width").value;
-                            // imgElt.height = document.getElementById("image-height").value;
-                            // let rotation = document.getElementById("image-rotation").value;
-                            // imgElt.style.transform = 'rotate(' + rotation.toString() + 'deg)';
+                            console.log("2 Timestamp: ", Date.now() - startTime);
 
-                            // // Draw a red square in the middle of the image
-                            // let canvas = document.createElement('canvas');
-                            // canvas.width = imgElt.width;
-                            // canvas.height = imgElt.height;
-                            // let ctx = canvas.getContext('2d');
-                            // ctx.drawImage(imgElt, 0, 0, imgElt.width, imgElt.height);
-                            // ctx.lineWidth = 2;
-                            // ctx.strokeStyle = '#53bfc1';
-                            // ctx.font = '20px Arial';
-                            // ctx.fillStyle = '#53bfc1';
-                            // ctx.beginPath();
-                            // ctx.rect(imgElt.width / 2 - 50, imgElt.height / 2 - 50, 100, 100);
-                            // ctx.stroke();
-                            // ctx.fillText("Center", imgElt.width / 2 - 50, imgElt.height / 2 - 50 - 5);
-                            // imgElt.src = canvas.toDataURL();
+                            // Attempt to parse JSON
+                            try {
+                                return JSON.parse(bboxText);
+                            } catch (error) {
+                                console.log("Error parsing JSON: " + error);
+                                return { bboxes: [] };
+                            }
+                        })
+                        .catch((error) => {
+                            console.error("Error in fetching or parsing bounding boxes: ", error);
+                            return { bboxes: [] };
+                        })
+                ]);
 
+                // Handle errors
+                if (!imageBlob || !bboxResp) {
+                    console.error("Error fetching data");
+                    continue;
+                }
 
-                            // // Draw bounding boxes on the image
-                            // let canvas = document.createElement('canvas');
-                            // canvas.width = imgElt.width;
-                            // canvas.height = imgElt.height;
-                            // let ctx = canvas.getContext('2d');
-                            // ctx.drawImage(imgElt, 0, 0, imgElt.width, imgElt.height);
-                            // ctx.lineWidth = 2;
-                            // ctx.strokeStyle = '#53bfc1';
-                            // ctx.font = '20px Arial';
-                            // ctx.fillStyle = '#53bfc1';
+                console.log("3 Timestamp: ", Date.now() - startTime);
 
-                            // // Get bounding box information from Coral Micro
-                            // fetch(bboxUrl)
-                            //     .then((resp) => {
-                            //         return resp.text();
-                            //     })
-                            //     .then((bbox_resp) => {
-                            //         // Decode the bounding box information as json
-                            //         bbox_resp = JSON.parse(bbox_resp);
-                            //         console.log(bbox_resp);
-                            //         bboxes = bbox_resp.bboxes;
+                // Log bounding boxes
+                console.log(bboxResp);
 
-                            //         // Draw a red square in the middle of the image
-                            //         ctx.beginPath();
-                            //         ctx.rect(imgElt.width / 2 - 50, imgElt.height / 2 - 50, 100, 100);
-                            //         ctx.stroke();
-                            //         ctx.fillText("Center", imgElt.width / 2 - 50, imgElt.height / 2 - 50 - 5);
+                // Draw image and bounding boxes
+                imgReader.readAsDataURL(imageBlob);
+                imgReader.onloadend = () => {
+                    img.onload = () => {
+                        ctx.clearRect(0, 0, imgElt.width, imgElt.height);
+                        ctx.drawImage(img, 0, 0, imgElt.width, imgElt.height);
+                        if (bboxResp.bboxes) {
+                            drawBoundingBoxes(ctx, bboxResp.bboxes, imgElt);
+                        }
+                    }
+                    img.src = imgReader.result;
+                }
 
-                            //         // Draw bounding boxes on the image
-                            //         for (let i = 0; i < bboxes.length; i++) {
-                            //             let bbox = bboxes[i];
-                            //             ctx.beginPath();
-                            //             ctx.rect(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]);
-                            //             ctx.stroke();
-                            //             ctx.fillText(bbox[4], bbox[0], bbox[1] - 5);
-                            //         }
-
-                            //         imgElt.src = canvas.toDataURL();
-                            //     })
-                            //     .catch((error) => {
-                            //         console.error("Error while fetching bounding boxes: " + error);
-                            //     });
-                        // };
+                console.log("4 Timestamp: ", Date.now() - startTime);
 
                 // Wait before fetching new image
                 await sleep(100);
             }
         }
+
     </script>
     <style>
         body {

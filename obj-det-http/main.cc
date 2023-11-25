@@ -70,7 +70,7 @@ static SemaphoreHandle_t img_mutex;
 static SemaphoreHandle_t bbox_mutex;
 static int img_width;
 static int img_height;
-static std::string bbox_json = "{}";
+static char *bbox_json;
 
 // Copy of image data for HTTP server
 #if ENABLE_HTTP_SERVER
@@ -116,11 +116,13 @@ HttpServer::Content UriHandler(const char* uri) {
   } else if (StrEndsWith(uri, kBoundingBoxPrefix)) {
 
     // Read bounding box info from shared memory
-    std::string bbox_info_copy = "{}";
+    std::string bbox_info_copy;
     if (xSemaphoreTake(bbox_mutex, portMAX_DELAY) == pdTRUE) {
-      bbox_info_copy = bbox_json;
+      bbox_info_copy = std::string(bbox_json);
       xSemaphoreGive(bbox_mutex);
     }
+
+    printf("bbox_info_copy: %s\r\n", bbox_info_copy.c_str());
 
     // Convert to vector of bytes
     std::vector<uint8_t> bbox_info_bytes(
@@ -199,7 +201,7 @@ HttpServer::Content UriHandler(const char* uri) {
 
   // Do forever
   while (true) {
-    
+
     // Calculate time between inferences
     timestamp = xTaskGetTickCount() * (1000 / configTICK_RATE_HZ);
     dtime = timestamp - timestamp_prev;
@@ -261,27 +263,39 @@ HttpServer::Content UriHandler(const char* uri) {
       xSemaphoreGive(img_mutex);
     }
 
+    // TODO: It's NOT the mutex! It seems to be related to constructing a bad JSON
+    
+    // TEST Create a fake JSON string to transmitting the bbox info
+    // bbox_json = "{\"dtime\": 12345, \"bboxes\": [{\"id\": 1, \"score\": 0.5, \"xmin\": 0.1, \"ymin\": 0.2, \"xmax\": 0.3, \"ymax\": 0.4}]}";
+
+
+
     // Convert results into json string
-    if (xSemaphoreTake(bbox_mutex, portMAX_DELAY) == pdTRUE) {
-      bbox_json = "{\"dtime\": " + std::to_string(dtime) + ", ";
-      bbox_json += "\"bboxes\": [";
+    std::string bbox_string = "{\"dtime\": " + std::to_string(dtime) + ", ";
+      bbox_string += "\"bboxes\": [";
       for (const auto& object : results) {
-        bbox_json += "{\"id\": " + std::to_string(object.id) + ", ";
-        bbox_json += "\"score\": " + std::to_string(object.score) + ", ";
-        bbox_json += "\"xmin\": " + std::to_string(object.bbox.xmin) + ", ";
-        bbox_json += "\"ymin\": " + std::to_string(object.bbox.ymin) + ", ";
-        bbox_json += "\"xmax\": " + std::to_string(object.bbox.xmax) + ", ";
-        bbox_json += "\"ymax\": " + std::to_string(object.bbox.ymax) + "}";
+        bbox_string += "{\"id\": " + std::to_string(object.id) + ", ";
+        bbox_string += "\"score\": " + std::to_string(object.score) + ", ";
+        bbox_string += "\"xmin\": " + std::to_string(object.bbox.xmin) + ", ";
+        bbox_string += "\"ymin\": " + std::to_string(object.bbox.ymin) + ", ";
+        bbox_string += "\"xmax\": " + std::to_string(object.bbox.xmax) + ", ";
+        bbox_string += "\"ymax\": " + std::to_string(object.bbox.ymax) + "}";
         if (&object != &results.back()) {
-          bbox_json += ", ";
+          bbox_string += ", ";
         }
       }
-      bbox_json += "]}";
+      bbox_string += "]}";
+
+
+    // Convert global char array
+    if (xSemaphoreTake(bbox_mutex, portMAX_DELAY) == pdTRUE) {
+      bbox_json = new char[bbox_string.length() + 1];
+      std::strcpy(bbox_json, bbox_string.c_str());
       xSemaphoreGive(bbox_mutex);
     }
 
-    // Print bounding box results
-    printf("%s\r\n", bbox_json.c_str());
+    // Print bounding box JSON
+    printf("%s\r\n", bbox_json);
 
     // Sleep to let other tasks run
     // vTaskDelay(pdMS_TO_TICKS(10));
