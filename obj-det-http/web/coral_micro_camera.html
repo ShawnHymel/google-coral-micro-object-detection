@@ -13,6 +13,21 @@
  limitations under the License.
 -->
 
+<!--
+    This is a simple HTML page that fetches the image and bounding box info from the Coral Micro
+    Camera HTTP server and draws them on a canvas. The image and bounding box info are fetched
+    using fetch() and the canvas is drawn using the 2D context of the canvas.
+
+    WARNING: There is a bug in the Coral Micro Camera HTTP server that seems to corrupt the bounding
+    box info. I suspect this is due to the server not being able to handle multiple requests at the
+    same time or there is a race condition with the bounding box info being updated. If you solve this,
+    please let me know. You will get a metaphorical gold star.
+
+    Modified by: Shawn Hymel
+    Date: November 23, 2023
+    License: This code is licensed under the Apache License 2.0.
+-->
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -20,21 +35,29 @@
     <title>Coral Micro Cam HTTP</title>
     <script type="text/javascript">
 
-        // TEST
+        // Uncomment these if you are running the Coral Micro Camera HTTP server on your computer
         const imgUrl = "http://10.10.10.1/camera_stream";
         const bboxUrl = "http://10.10.10.1/bboxes";
 
-        // // Coral Micro's image url.
+        // Uncomment these if you are running the Coral Micro Camera HTTP server on the Coral Dev Board
         // const imgUrl = "/camera_stream";
         // const bboxUrl = "/bboxes";
 
-        function isASCII(str) {
-            return /^[\x00-\x7F]*$/.test(str);
-}
+        // Timeout for fetch requests (ms)
+        const fetchImageTimeout = 2000;
+        const fetchBboxTimeout = 200;
+
+        // Global variables
+        let rawImageData = null;
 
         // Sleeps for micro seconds.
         function sleep (micro) {
             return new Promise((resolve) => setTimeout(resolve, micro));
+        }
+
+        // Function to generate a random 8-digit hex value
+        function generateRandomHex() {
+            return Math.floor(Math.random() * 0x100000000).toString(16).substr(0, 8);
         }
 
         // Draws bounding boxes on the canvas
@@ -56,58 +79,109 @@
                 ctx.fillText(bbox['id'], xmin, ymin - 5);
             });
         }
-        
+
+        // Helper function to create a timeout promise
+        function timeout(ms, promise) {
+            return new Promise((resolve, reject) => {
+                setTimeout(() => {
+                    reject(new Error("Timeout after " + ms + " ms"));
+                }, ms);
+                promise.then(resolve, reject);
+            });
+        }
+
+        // Function to save the image with a custom filename
+        function saveImage() {
+            const imgElt = document.getElementById("cam_canvas");
+
+            // Get the value from the "Label" input field
+            const imageLabel = document.getElementById("image-label").value;
+
+            // Generate a random 8-digit hex value
+            const randomHex = generateRandomHex();
+
+            if (rawImageData) {
+                // Convert the raw image data to a Blob
+                const imageBlob = new Blob([rawImageData], { type: 'image/jpeg' });
+
+                // Construct the filename using the label and random hex
+                const filename = `${imageLabel}.${randomHex}.jpg`;
+
+                // Create a hidden anchor element and trigger the download
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(imageBlob);
+                a.download = filename;
+                a.style.display = 'none';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            } else {
+                console.error('No raw image data available.');
+            }
+        }
+                
         // Main loop to fetch image and bounding boxes and draw them on the canvas
         async function updateImage () {
+
+            // Add event listener to save image button
+            const saveImageBtn = document.getElementById("save-image-button");
+            saveImageBtn.addEventListener("click", saveImage);
+
+            // Create image reader and canvas context
             const imgReader = new FileReader();
             const imgElt = document.getElementById("cam_canvas");
             const ctx = imgElt.getContext('2d');
-            let img = new Image();
-
-            let startTime = Date.now();
 
             // Do this forever
+            let img = new Image();
+            let startTime = Date.now();
             while (1) {
 
+                // Reset variables
                 startTime = Date.now();
-                console.log("--------------------");
-
-                // Fetch image and bbox info
                 let bboxInfo = null;
                 let imageBlob = null;
+
+                // Fetch image
                 try {
 
-                    console.log("0 Timestamp: ", Date.now() - startTime);
+                    // Fetch image data with timeout
+                    const imageResponse = await timeout(fetchImageTimeout, fetch(imgUrl));
+                    imageBlob = await timeout(fetchImageTimeout, imageResponse.blob());
 
-                    // Fetch bbox info and wait for it to complete
-                    const bboxResponse = await fetch(bboxUrl);
-                    const bboxStr = await bboxResponse.text();
-
-                    console.log("1 Timestamp: ", Date.now() - startTime);
-
-                    console.log("bboxStr: ", bboxStr);
-                    bboxInfo = JSON.parse(bboxStr);
-                    console.log("bboxInfo: ", bboxInfo);
-                    console.log("2 Timestamp: ", Date.now() - startTime);
-
-                    // Fetch image data and wait for it to complete
-                    const imageResponse = await fetch(imgUrl);
-                    imageBlob = await imageResponse.blob();
-
-                    console.log("3 Timestamp: ", Date.now() - startTime);
+                    // Store raw image data
+                    rawImageData = await imageBlob.arrayBuffer();
 
                 } catch (error) {
-                    console.error("Error in fetching bbox or image: ", error);
+                    console.error("Error in fetching image: ", error);
                     continue;
                 }
 
-                // Handle errors
+                // Fetch bbox info
+                try {
+                    
+                    // Fetch bbox info with timeout
+                    const bboxResponse = await timeout(fetchBboxTimeout, fetch(bboxUrl));
+                    const bboxStrPromise = bboxResponse.text();
+                    const bboxStr = await timeout(fetchBboxTimeout, bboxStrPromise);
+
+                    // Parse bbox info
+                    bboxInfo = JSON.parse(bboxStr);
+
+                    // Uncomment to view bbox info
+                    // console.log("bboxStr: ", bboxStr);
+                    // console.log("bboxInfo: ", bboxInfo);
+                
+                } catch (error) {
+                    console.error("Error in fetching bbox info: ", error);
+                    continue;
+                }
+                
+                // Go to top of loop if we don't have image or bbox info
                 if (!imageBlob || !bboxInfo) {
                     console.error("Error fetching data");
                     continue;
                 }
-
-                console.log("4 Timestamp: ", Date.now() - startTime);
 
                 // Log bounding boxes
                 console.log(bboxInfo);
@@ -125,7 +199,13 @@
                     img.src = imgReader.result;
                 }
 
-                console.log("5 Timestamp: ", Date.now() - startTime);
+                // Calculate dynamic FPS
+                const fps = 1000 / bboxInfo.dtime
+                const dynamicFpsLabel = document.getElementById("dynamic-fps-label");
+                dynamicFpsLabel.textContent = `FPS: ${fps.toFixed(2)}`;
+
+                // Log time to fetch and draw image
+                console.log("Total update time: ", Date.now() - startTime);
 
                 // Wait before fetching new image
                 await sleep(10);
@@ -155,10 +235,17 @@
             color: #f5d0cb;
             padding-left: 10px;
         }
-        #setting-menu {
+        #settings-save-menu {
             height: 50px;
             background: #f5d0cb;
             border-top: 1px solid #53bfc1;
+        }
+        #dynamic-fps-label {
+            height: 30px;
+            color: #000000;
+            background: #f5d0cb;
+            padding-left: 10px;
+            line-height: 30px;
         }
         .input-label {
             padding-left: 10px;
@@ -170,19 +257,16 @@
     <div id="coral-cam-title-container">
         <label class="coral-cam-title">Coral Micro Cam</label>
     </div>
-    <div id="setting-menu">
+    <div id="settings-save-menu">
         <div style="margin-top: 10px"></div>
-        <label for="image-width" class="input-label">Image Width:</label>
-        <input id="image-width" type="number" required value=500>
-        <label for="image-height" class="input-label">Image Height:</label>
-        <input id="image-height" type="number" required value=500>
-        <label for="image-rotation" class="input-label">Rotation:</label>
-        <select name="image-rotation" id="image-rotation">
-            <option value=0 selected>0</option>
-            <option value=90>90</option>
-            <option value=180>180</option>
-            <option value=270>270</option>
-        </select>
+        <label for="image-zoom" class="input-label">Zoom:</label>
+        <input id="image-zoom" type="number" style="width: 40px;" required value=1>
+        <label for="image-label" class="input-label">Label:</label>
+        <input id="image-label" type="text" required value="image">
+        <button id="save-image-button">Save Image</button>
+    </div>
+    <div id="dynamic-fps-label">
+        FPS: N/A
     </div>
     <canvas id="cam_canvas" width="500" height="500"></canvas>
 </div>

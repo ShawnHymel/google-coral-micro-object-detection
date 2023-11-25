@@ -9,8 +9,14 @@
  *  - https://github.com/google-coral/coralmicro/tree/main/examples/camera_streaming_http
  *  - https://github.com/google-coral/coralmicro/tree/main/examples/detect_objects
  *
+ * WARNING: There is a bug in HTTP handler part of this code that seems to 
+ * corrupt the bounding box info when requested by the client. I suspect this is
+ * due to the server not being able to handle multiple requests at the same time
+ * or there is a race condition with the bounding box info being updated. If you
+ * solve this, please let me know. You will get a metaphorical gold star.
+ * 
  * Author: Shawn Hymel
- * Date: November 12, 2023
+ * Date: November 25, 2023
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -118,8 +124,6 @@ HttpServer::Content UriHandler(const char* uri) {
   // Give client bounding box info
   } else if (StrEndsWith(uri, kBoundingBoxPrefix)) {
 
-    printf("BBox request received\r\n");
-
     // Read bounding box info from shared memory and convert to vector of bytes
     char bbox_info_copy[bbox_buf_size];
     std::vector<uint8_t> bbox_info_bytes;
@@ -132,9 +136,9 @@ HttpServer::Content UriHandler(const char* uri) {
       xSemaphoreGive(bbox_mutex);
     }
 
-    printf("bbox_info_copy: %s\r\n", bbox_info_copy);
-    printf("bbox_info_copy length: %d\r\n", std::strlen(bbox_info_copy));
-    printf("bbox_info_bytes.size(): %d\r\n", bbox_info_bytes.size());
+    // TODO: Figure out the multi-request or race condition bug that is causing
+    // the bbox_info_bytes to be corrupted. The workaround is to have the
+    // client timeout if it doesn't get a response in some amount of time.
 
     return bbox_info_bytes;
   }
@@ -268,11 +272,6 @@ HttpServer::Content UriHandler(const char* uri) {
       // Unlock critical section
       xSemaphoreGive(img_mutex);
     }
-
-    // TODO: It's NOT the mutex! It seems to be related to constructing a bad JSON
-    
-    // TEST Create a fake JSON string to transmitting the bbox info
-    // bbox_json = "{\"dtime\": 12345, \"bboxes\": [{\"id\": 1, \"score\": 0.5, \"xmin\": 0.1, \"ymin\": 0.2, \"xmax\": 0.3, \"ymax\": 0.4}]}";
 
     // Convert results into json string
     std::string bbox_string = "{\"dtime\": " + std::to_string(dtime) + ", ";
