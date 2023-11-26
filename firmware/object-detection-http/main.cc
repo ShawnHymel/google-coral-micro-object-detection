@@ -63,6 +63,9 @@ typedef struct {
   std::vector<uint8_t> *jpeg;
 } ImgResult;
 
+// Camera settings
+constexpr auto camRotation = CameraRotation::k270; // Default: CameraRotation::k0
+
 // Globals
 constexpr char kIndexFileName[] = "/index.html";
 constexpr char kCameraStreamUrlPrefix[] = "/camera_stream";
@@ -227,7 +230,7 @@ HttpServer::Content UriHandler(const char* uri) {
       CameraFrameFormat fmt{
         CameraFormat::kRgb,   
         CameraFilterMethod::kBilinear,
-        CameraRotation::k270, 
+        camRotation,
         img_height,
         img_width,         
         false,            // Preserve ratio

@@ -1,8 +1,8 @@
-# Object Detection HTTP Server
+# Image Collection via HTTP Server
 
-Firmware for the Google Coral Micro to capture images from the onboard camera, perform object detection, and stream the images along with bounding box information via Ethernet over USB. Flash the firmware, and with the board plugged into your computer, navigate to [http://10.10.10.1](http://10.10.10.1) on a browser. You should see images with bounding boxes displayed.
+Firmware for the Google Coral Micro to stream images from the camera via Ethernet over USB. Images are hosted from an HTTP server. Flash the firmware, and with the board plugged into your computer, navigate to [http://10.10.10.1](http://10.10.10.1) on a browser. You should see images being streamed.
 
-Adjust the zoom level to make the image appear larger or smaller. As with the *image-collection-http* firmware, you can save the raw images (original resolution, no bounding boxes) to your download folder by pressing the *Save Image* button.
+Adjust the zoom level to make the image appear larger or smaller. Change the label if you wish to do image classification instead of object detection (i.e. it changes the prefix on the saved JPG). Click *Save Image* to save the image (original resolution, not affected by *zoom* multiplier) to your downloads folder.
 
 ## Build and Flash Locally
 

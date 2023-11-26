@@ -14,14 +14,10 @@
 -->
 
 <!--
-    This is a simple HTML page that fetches the image and bounding box info from the Coral Micro
-    Camera HTTP server and draws them on a canvas. The image and bounding box info are fetched
-    using fetch() and the canvas is drawn using the 2D context of the canvas.
-
-    WARNING: There is a bug in the Coral Micro Camera HTTP server that seems to corrupt the bounding
-    box info. I suspect this is due to the server not being able to handle multiple requests at the
-    same time or there is a race condition with the bounding box info being updated. If you solve this,
-    please let me know. You will get a metaphorical gold star.
+    This is a simple HTML page that fetches the image data from the Google Coral
+    Micro Camera HTTP server and displays it on a canvas. It is based on the 
+    example code here: 
+    https://github.com/google-coral/coralmicro/blob/main/examples/camera_streaming_http/web/coral_micro_camera.html
 
     Modified by: Shawn Hymel
     Date: November 23, 2023
@@ -37,15 +33,12 @@
 
         // Uncomment these if you are running the Coral Micro Camera HTTP server on your computer
         // const imgUrl = "http://10.10.10.1/camera_stream";
-        // const bboxUrl = "http://10.10.10.1/bboxes";
 
         // Uncomment these if you are running the Coral Micro Camera HTTP server on the Coral Dev Board
         const imgUrl = "/camera_stream";
-        const bboxUrl = "/bboxes";
 
         // Timeout for fetch requests (ms)
         const fetchImageTimeout = 2000;
-        const fetchBboxTimeout = 200;
 
         // Global variables
         let rawImageData = null;
@@ -58,26 +51,6 @@
         // Function to generate a random 8-digit hex value
         function generateRandomHex() {
             return Math.floor(Math.random() * 0x100000000).toString(16).substr(0, 8);
-        }
-
-        // Draws bounding boxes on the canvas
-        function drawBoundingBoxes(ctx, bboxes, imgElt) {
-            bboxes.forEach(bbox => {
-                let xmin = Math.max(bbox['xmin'] * imgElt.width, 0);
-                let ymin = Math.max(bbox['ymin'] * imgElt.height, 0);
-                let xmax = Math.min(bbox['xmax'] * imgElt.width, imgElt.width);
-                let ymax = Math.min(bbox['ymax'] * imgElt.height, imgElt.height);
-
-                // Draw box on the canvas
-                ctx.lineWidth = 2;
-                ctx.strokeStyle = '#ff0000';
-                ctx.font = '20px Arial';
-                ctx.fillStyle = '#ff0000';
-                ctx.beginPath();
-                ctx.rect(xmin, ymin, xmax - xmin, ymax - ymin);
-                ctx.stroke();
-                ctx.fillText(bbox['id'], xmin, ymin - 5);
-            });
         }
 
         // Helper function to create a timeout promise
@@ -139,7 +112,6 @@
 
                 // Reset variables
                 startTime = Date.now();
-                let bboxInfo = null;
                 let imageBlob = null;
 
                 // Fetch image
@@ -156,37 +128,14 @@
                     console.error("Error in fetching image: ", error);
                     continue;
                 }
-
-                // Fetch bbox info
-                try {
-                    
-                    // Fetch bbox info with timeout
-                    const bboxResponse = await timeout(fetchBboxTimeout, fetch(bboxUrl));
-                    const bboxStrPromise = bboxResponse.text();
-                    const bboxStr = await timeout(fetchBboxTimeout, bboxStrPromise);
-
-                    // Parse bbox info
-                    bboxInfo = JSON.parse(bboxStr);
-
-                    // Uncomment to view bbox info
-                    // console.log("bboxStr: ", bboxStr);
-                    // console.log("bboxInfo: ", bboxInfo);
-                
-                } catch (error) {
-                    console.error("Error in fetching bbox info: ", error);
-                    continue;
-                }
                 
                 // Go to top of loop if we don't have image or bbox info
-                if (!imageBlob || !bboxInfo) {
+                if (!imageBlob) {
                     console.error("Error fetching data");
                     continue;
                 }
 
-                // Log bounding boxes
-                console.log(bboxInfo);
-
-                // Draw image and bounding boxes
+                // Draw image
                 imgReader.readAsDataURL(imageBlob);
                 imgReader.onloadend = () => {
                     img.onload = () => {
@@ -205,22 +154,9 @@
 
                         // Draw image
                         ctx.drawImage(img, 0, 0, imgElt.width, imgElt.height);
-
-                        // Draw bounding boxes
-                        if (bboxInfo.bboxes) {
-                            drawBoundingBoxes(ctx, bboxInfo.bboxes, imgElt);
-                        }
                     }
                     img.src = imgReader.result;
                 }
-
-                // Calculate dynamic FPS
-                const fps = 1000 / bboxInfo.dtime
-                const dynamicFpsLabel = document.getElementById("dynamic-fps-label");
-                dynamicFpsLabel.textContent = `FPS: ${fps.toFixed(2)}`;
-
-                // Log time to fetch and draw image
-                console.log("Total update time: ", Date.now() - startTime);
 
                 // Wait before fetching new image
                 await sleep(10);
@@ -255,13 +191,6 @@
             background: #f5d0cb;
             border-top: 1px solid #53bfc1;
         }
-        #dynamic-fps-label {
-            height: 30px;
-            color: #000000;
-            background: #f5d0cb;
-            padding-left: 10px;
-            line-height: 30px;
-        }
         .input-label {
             padding-left: 10px;
         }
@@ -279,9 +208,6 @@
         <label for="image-label" class="input-label">Label:</label>
         <input id="image-label" type="text" required value="image">
         <button id="save-image-button">Save Image</button>
-    </div>
-    <div id="dynamic-fps-label">
-        FPS: N/A
     </div>
     <canvas id="cam_canvas"></canvas>
 </div>
