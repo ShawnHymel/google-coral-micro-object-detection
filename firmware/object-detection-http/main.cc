@@ -64,11 +64,11 @@ typedef struct {
 } ImgResult;
 
 // Globals
-constexpr char kIndexFileName[] = "/coral_micro_camera.html";
+constexpr char kIndexFileName[] = "/index.html";
 constexpr char kCameraStreamUrlPrefix[] = "/camera_stream";
 constexpr char kBoundingBoxPrefix[] = "/bboxes";
 constexpr char kModelPath[] =
-    "/models/tf2_ssd_mobilenet_v2_coco17_ptq_edgetpu.tflite";
+    "/model-tpu.tflite";
 constexpr int kTensorArenaSize = 8 * 1024 * 1024;
 STATIC_TENSOR_ARENA_IN_SDRAM(tensor_arena, kTensorArenaSize);
 static std::vector<uint8_t> *img_ptr;

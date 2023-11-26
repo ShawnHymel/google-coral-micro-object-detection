@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.13)
 if (NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     set(
         CMAKE_TOOLCHAIN_FILE 
-        $ENV{CORAL_MICRO_PATH}/cmake/toolchain-arm-none-eabi-gcc.cmake
+        ${CMAKE_CURRENT_SOURCE_DIR}/coralmicro/cmake/toolchain-arm-none-eabi-gcc.cmake
     )
 endif()
 
@@ -24,8 +24,8 @@ add_executable_m7(
     coralmicro-app
     main.cc
     DATA
-    ${PROJECT_SOURCE_DIR}/models/tf2_ssd_mobilenet_v2_coco17_ptq_edgetpu.tflite
-    ${CMAKE_CURRENT_SOURCE_DIR}/web/coral_micro_camera.html>/coral_micro_camera.html
+    ${CMAKE_CURRENT_SOURCE_DIR}/model-tpu.tflite
+    ${CMAKE_CURRENT_SOURCE_DIR}/index.html>/index.html
 )
 
 # Link to libraries
