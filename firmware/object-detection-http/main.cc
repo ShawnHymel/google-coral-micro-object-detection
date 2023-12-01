@@ -53,6 +53,7 @@
 #include "third_party/tflite-micro/tensorflow/lite/micro/micro_mutable_op_resolver.h"
 
 #define ENABLE_HTTP_SERVER 1
+#define DEBUG 0
 
 namespace coralmicro {
 namespace {
@@ -332,7 +333,9 @@ void Main() {
 
   // Say hello
   Blink(3, 500);
+#if DEBUG
   printf("Object detection inference and HTTP server over USB\r\n");
+#endif
 
   // Initialize image mutex
   img_mutex = xSemaphoreCreateMutex();
@@ -357,7 +360,9 @@ void Main() {
   CameraTask::GetSingleton()->Enable(CameraMode::kStreaming);
 
   // Start capture and inference task
+#if DEBUG
   printf("Starting inference task\r\n");
+#endif
   xTaskCreate(
     &InferenceTask,
     "InferenceTask",
@@ -372,7 +377,9 @@ void Main() {
   // Initialize IP over USB
   std::string usb_ip;
   if (GetUsbIpAddress(&usb_ip)) {
+#if DEBUG
     printf("Serving on: http://%s\r\n", usb_ip.c_str());
+#endif
   }
 
   // Initialize HTTP server (attach request handler)
