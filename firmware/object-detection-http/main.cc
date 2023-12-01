@@ -215,16 +215,7 @@ HttpServer::Content UriHandler(const char* uri) {
   // Do forever
   while (true) {
 
-    // Calculate time between inferences
-    timestamp = xTaskGetTickCount() * (1000 / configTICK_RATE_HZ);
-    dtime = timestamp - timestamp_prev;
-    timestamp_prev = timestamp;
-
-    // Turn status LED on to let the user know we're taking a photo
-    LedSet(Led::kUser, true);
-
-    // Get frame from camera using the configuration we set (~38 ms)
-    if (xSemaphoreTake(img_mutex, portMAX_DELAY) == pdTRUE) {
+    // Calculate time between inferencesincludepdTRUE) {
 
       // Configure camera image
       CameraFrameFormat fmt{
