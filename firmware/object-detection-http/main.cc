@@ -53,7 +53,7 @@
 #include "third_party/tflite-micro/tensorflow/lite/micro/micro_mutable_op_resolver.h"
 
 #define ENABLE_HTTP_SERVER 1
-#define DEBUG 0
+#define DEBUG 1
 
 namespace coralmicro {
 namespace {
