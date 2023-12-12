@@ -72,7 +72,7 @@ constexpr char kIndexFileName[] = "/index.html";
 constexpr char kCameraStreamUrlPrefix[] = "/camera_stream";
 constexpr char kBoundingBoxPrefix[] = "/bboxes";
 constexpr char kModelPath[] =
-    "/model-tpu.tflite";
+    "/ei-xrp-bucket-delivery_edgetpu.tflite";
 constexpr int kTensorArenaSize = 8 * 1024 * 1024;
 STATIC_TENSOR_ARENA_IN_SDRAM(tensor_arena, kTensorArenaSize);
 static std::vector<uint8_t> *img_ptr;
@@ -212,6 +212,10 @@ HttpServer::Content UriHandler(const char* uri) {
 #if ENABLE_HTTP_SERVER
     img_copy = new std::vector<uint8_t>(img_ptr->size());
 #endif
+
+// #if DEBUG
+//   printf("TensorFlow Lite version: %s\r\n", tflite::GetVersion());
+// #endif
 
   // Do forever
   while (true) {
