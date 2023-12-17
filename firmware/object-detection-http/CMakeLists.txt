@@ -24,7 +24,7 @@ add_executable_m7(
     coralmicro-app
     main.cc
     DATA
-    ${CMAKE_CURRENT_SOURCE_DIR}/ei-xrp-bucket-delivery_edgetpu.tflite
+    ${CMAKE_CURRENT_SOURCE_DIR}/model_int8_edgetpu.tflite
     ${CMAKE_CURRENT_SOURCE_DIR}/index.html>/index.html
 )
 

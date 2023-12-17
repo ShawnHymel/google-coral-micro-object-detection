@@ -72,7 +72,7 @@ constexpr char kIndexFileName[] = "/index.html";
 constexpr char kCameraStreamUrlPrefix[] = "/camera_stream";
 constexpr char kBoundingBoxPrefix[] = "/bboxes";
 constexpr char kModelPath[] =
-    "/ei-xrp-bucket-delivery_edgetpu.tflite";
+    "/model_int8_edgetpu.tflite";
 constexpr int kTensorArenaSize = 8 * 1024 * 1024;
 STATIC_TENSOR_ARENA_IN_SDRAM(tensor_arena, kTensorArenaSize);
 static std::vector<uint8_t> *img_ptr;
@@ -80,7 +80,7 @@ static SemaphoreHandle_t img_mutex;
 static SemaphoreHandle_t bbox_mutex;
 static int img_width;
 static int img_height;
-static constexpr float bbox_threshold = 0.6;
+static constexpr float bbox_threshold = 0.2;
 static constexpr int max_bboxes = 5;
 static constexpr unsigned int bbox_buf_size = 100 + (max_bboxes * 200) + 1;
 static char bbox_buf[bbox_buf_size];
@@ -217,6 +217,27 @@ HttpServer::Content UriHandler(const char* uri) {
 //   printf("TensorFlow Lite version: %s\r\n", tflite::GetVersion());
 // #endif
 
+  // Get output tensor shapes
+  TfLiteTensor* tensor_bboxes = interpreter.output_tensor(0);
+  TfLiteTensor* tensor_scores = interpreter.output_tensor(1);
+  unsigned int num_boxes = tensor_bboxes->dims->data[1];
+  unsigned int num_coords = tensor_bboxes->dims->data[2];
+  unsigned int num_classes = tensor_scores->dims->data[2];
+
+  // Print output tensor shapes
+#if DEBUG
+  printf("num_boxes: %d\r\n", num_boxes);
+  printf("num_coords: %d\r\n", num_coords);
+  printf("num_classes: %d\r\n", num_classes);
+  printf("bytes in tensor_bboxes: %d\r\n", tensor_bboxes->bytes);
+  if (tensor_scores->data.data == nullptr) {
+    printf("tensor_scores.data is empty!\r\n");
+  }
+#endif
+
+  // Convert threshold to fixed point
+  uint8_t threshold = static_cast<uint8_t>(bbox_threshold * 256);
+
   // Do forever
   while (true) {
 
@@ -266,7 +287,107 @@ HttpServer::Content UriHandler(const char* uri) {
       }
     
       // Get object detection results (as a vector of Objects)
-      results = tensorflow::GetDetectionResults(&interpreter, bbox_threshold, max_bboxes);
+      // results = tensorflow::GetDetectionResults(&interpreter, bbox_threshold, max_bboxes);
+
+
+      // ***
+      // TODO: Figure out why this is hanging on ->data.uint8
+
+      // for (unsigned int i = 0; i < tensor_bboxes->dims->size; i++) {
+      //   printf("tensor_bboxes->dims->data[%d]: %d\r\n", i, tensor_bboxes->dims->data[i]);
+      // }
+
+      // if (tensor_scores->type == kTfLiteUInt8) {
+      //   printf("tensor_scores.type == kTfLiteUInt8\r\n");
+      // } else {
+      //   printf("tensor_scores.type != kTfLiteUInt8\r\n");
+      // }
+
+      // printf("bytes in tensor_bboxes: %d\r\n", tensor_bboxes->bytes);
+
+      // if (tensor_scores->data.data == nullptr) {
+      //   printf("tensor_scores.data is empty!\r\n");
+      // }
+
+      // BBox data
+      float score, class_max, ymin, xmin, ymax, xmax;
+      std::vector<std::vector<float>> bbox_list;
+
+      // Get data
+      uint8_t *scores = tensor_scores->data.uint8;
+      uint8_t *bboxes = tensor_bboxes->data.uint8;
+      
+      // Find bounding boxes with scores above threshold
+      for (unsigned int i = 0; i < num_boxes; ++i) {
+        score = -1.0f;
+        class_max = 0.0;
+        for (unsigned int j = 0; j < num_classes; ++j) {
+
+          // Compare score to threshold and find max score
+          if (scores[i * 3 + j] >= threshold) {
+            if (scores[i * 3 + j] > score) {
+              score = (float)scores[i * 3 + j] * 0.00390625;
+              class_max = (float)j;
+            }
+          }
+        }
+
+        // If score is above threshold, add to list of bboxes
+        if (score > 0.0f) {
+          ymin = (float)bboxes[i * 4] * 0.00390625;
+          xmin = (float)bboxes[i * 4 + 1] * 0.00390625;
+          ymax = (float)bboxes[i * 4 + 2] * 0.00390625;
+          xmax = (float)bboxes[i * 4 + 3] * 0.00390625;
+          bbox_list.push_back({score, class_max, ymin, xmin, ymax, xmax});
+        }
+      }
+
+      // Sort bboxes by score
+      std::sort(bbox_list.begin(), bbox_list.end(), 
+        [](const std::vector<float>& a, const std::vector<float>& b) {
+          return a[0] > b[0];
+        }
+      );
+
+      // Print bboxes
+      for (const auto& bbox : bbox_list) {
+        printf("score: %f, class: %f, ymin: %f, xmin: %f, ymax: %f, xmax: %f\r\n", 
+          bbox[0], bbox[1], bbox[2], bbox[3], bbox[4], bbox[5]);
+      }
+
+      // TODO: 
+      //  - get bounding box info from score indices
+      //  - push score, class, bbox info to results vector
+      //  - sort results vector by score
+      //  - return top X results
+      //  - convert results to JSON string
+
+
+      // printf("scores: ");
+      // for (unsigned int i = 0; i < 19125; ++i) {
+      //   printf("|");
+      //   for (unsigned int j = 0; j < 3; ++i) {
+      //     printf("%f ", scores[i * 3 + j]);
+      //   }
+      // }
+      // printf("\r\n");
+
+
+      // TEST: Get results from inference
+      // const float *bboxes, *scores;
+      // bboxes = tflite::GetTensorData<float>(interpreter.output_tensor(0));
+      // scores = tflite::GetTensorData<float>(interpreter.output_tensor(1));
+      
+      // printf("bbox scores: ");
+      // for (unsigned int i = 0; i < 19125; ++i) {
+      //   for (unsigned int j = 0; j < 3; ++j) {
+      //     printf("%f ", scores[i * 3 + j]);
+      //   }
+      //   printf("\r\n");
+      // }
+      // printf("\r\n");
+
+      // ***
       
       // Copy image to separate buffer for HTTP server
 #if ENABLE_HTTP_SERVER
@@ -281,36 +402,39 @@ HttpServer::Content UriHandler(const char* uri) {
       xSemaphoreGive(img_mutex);
     }
 
-    // Convert results into json string
-    std::string bbox_string = "{\"dtime\": " + std::to_string(dtime) + ", ";
-      bbox_string += "\"bboxes\": [";
-      for (const auto& object : results) {
-        bbox_string += "{\"id\": " + std::to_string(object.id) + ", ";
-        bbox_string += "\"score\": " + std::to_string(object.score) + ", ";
-        bbox_string += "\"xmin\": " + std::to_string(object.bbox.xmin) + ", ";
-        bbox_string += "\"ymin\": " + std::to_string(object.bbox.ymin) + ", ";
-        bbox_string += "\"xmax\": " + std::to_string(object.bbox.xmax) + ", ";
-        bbox_string += "\"ymax\": " + std::to_string(object.bbox.ymax) + "}";
-        if (&object != &results.back()) {
-          bbox_string += ", ";
-        }
-      }
-      bbox_string += "]}";
+    // TEST
+    printf("dtime: %lu\r\n", dtime);
 
-    // Check length of JSON string
-    if (bbox_string.length() > bbox_buf_size) {
-      printf("ERROR: Bounding box JSON string too long\r\n");
-      continue;
-    }
+    // // Convert results into json string
+    // std::string bbox_string = "{\"dtime\": " + std::to_string(dtime) + ", ";
+    //   bbox_string += "\"bboxes\": [";
+    //   for (const auto& object : results) {
+    //     bbox_string += "{\"id\": " + std::to_string(object.id) + ", ";
+    //     bbox_string += "\"score\": " + std::to_string(object.score) + ", ";
+    //     bbox_string += "\"xmin\": " + std::to_string(object.bbox.xmin) + ", ";
+    //     bbox_string += "\"ymin\": " + std::to_string(object.bbox.ymin) + ", ";
+    //     bbox_string += "\"xmax\": " + std::to_string(object.bbox.xmax) + ", ";
+    //     bbox_string += "\"ymax\": " + std::to_string(object.bbox.ymax) + "}";
+    //     if (&object != &results.back()) {
+    //       bbox_string += ", ";
+    //     }
+    //   }
+    //   bbox_string += "]}";
 
-    // Convert global char array
-    if (xSemaphoreTake(bbox_mutex, portMAX_DELAY) == pdTRUE) {
-      std::strcpy(bbox_buf, bbox_string.c_str());
-      xSemaphoreGive(bbox_mutex);
-    }
+    // // Check length of JSON string
+    // if (bbox_string.length() > bbox_buf_size) {
+    //   printf("ERROR: Bounding box JSON string too long\r\n");
+    //   continue;
+    // }
 
-    // Print bounding box JSON
-    printf("%s\r\n", bbox_buf);
+    // // Convert global char array
+    // if (xSemaphoreTake(bbox_mutex, portMAX_DELAY) == pdTRUE) {
+    //   std::strcpy(bbox_buf, bbox_string.c_str());
+    //   xSemaphoreGive(bbox_mutex);
+    // }
+
+    // // Print bounding box JSON
+    // printf("%s\r\n", bbox_buf);
 
     // Sleep to let other tasks run
     // vTaskDelay(pdMS_TO_TICKS(10));
