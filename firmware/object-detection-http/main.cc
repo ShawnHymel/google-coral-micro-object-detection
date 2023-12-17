@@ -81,7 +81,7 @@ static SemaphoreHandle_t bbox_mutex;
 static int img_width;
 static int img_height;
 static constexpr float bbox_threshold = 0.2;
-static constexpr int max_bboxes = 5;
+static constexpr size_t max_bboxes = 5;
 static constexpr unsigned int bbox_buf_size = 100 + (max_bboxes * 200) + 1;
 static char bbox_buf[bbox_buf_size];
 
@@ -155,6 +155,8 @@ HttpServer::Content UriHandler(const char* uri) {
  * Loop forever taking images from the camera and performing inference
  */
 [[noreturn]] void InferenceTask(void* param) {
+
+  float score, class_max, ymin, xmin, ymax, xmax;
 
   // Used for calculating FPS
   unsigned long dtime;
@@ -241,6 +243,8 @@ HttpServer::Content UriHandler(const char* uri) {
   // Do forever
   while (true) {
 
+    std::vector<std::vector<float>> bbox_list;
+
     // Calculate time between inferences
     timestamp = xTaskGetTickCount() * (1000 / configTICK_RATE_HZ);
     dtime = timestamp - timestamp_prev;
@@ -285,33 +289,6 @@ HttpServer::Content UriHandler(const char* uri) {
         printf("ERROR: Inference failed\r\n");
         continue;
       }
-    
-      // Get object detection results (as a vector of Objects)
-      // results = tensorflow::GetDetectionResults(&interpreter, bbox_threshold, max_bboxes);
-
-
-      // ***
-      // TODO: Figure out why this is hanging on ->data.uint8
-
-      // for (unsigned int i = 0; i < tensor_bboxes->dims->size; i++) {
-      //   printf("tensor_bboxes->dims->data[%d]: %d\r\n", i, tensor_bboxes->dims->data[i]);
-      // }
-
-      // if (tensor_scores->type == kTfLiteUInt8) {
-      //   printf("tensor_scores.type == kTfLiteUInt8\r\n");
-      // } else {
-      //   printf("tensor_scores.type != kTfLiteUInt8\r\n");
-      // }
-
-      // printf("bytes in tensor_bboxes: %d\r\n", tensor_bboxes->bytes);
-
-      // if (tensor_scores->data.data == nullptr) {
-      //   printf("tensor_scores.data is empty!\r\n");
-      // }
-
-      // BBox data
-      float score, class_max, ymin, xmin, ymax, xmax;
-      std::vector<std::vector<float>> bbox_list;
 
       // Get data
       uint8_t *scores = tensor_scores->data.uint8;
@@ -338,56 +315,16 @@ HttpServer::Content UriHandler(const char* uri) {
           xmin = (float)bboxes[i * 4 + 1] * 0.00390625;
           ymax = (float)bboxes[i * 4 + 2] * 0.00390625;
           xmax = (float)bboxes[i * 4 + 3] * 0.00390625;
-          bbox_list.push_back({score, class_max, ymin, xmin, ymax, xmax});
+          bbox_list.push_back({class_max, score, ymin, xmin, ymax, xmax});
         }
       }
 
       // Sort bboxes by score
       std::sort(bbox_list.begin(), bbox_list.end(), 
         [](const std::vector<float>& a, const std::vector<float>& b) {
-          return a[0] > b[0];
+          return a[1] > b[1];
         }
       );
-
-      // Print bboxes
-      for (const auto& bbox : bbox_list) {
-        printf("score: %f, class: %f, ymin: %f, xmin: %f, ymax: %f, xmax: %f\r\n", 
-          bbox[0], bbox[1], bbox[2], bbox[3], bbox[4], bbox[5]);
-      }
-
-      // TODO: 
-      //  - get bounding box info from score indices
-      //  - push score, class, bbox info to results vector
-      //  - sort results vector by score
-      //  - return top X results
-      //  - convert results to JSON string
-
-
-      // printf("scores: ");
-      // for (unsigned int i = 0; i < 19125; ++i) {
-      //   printf("|");
-      //   for (unsigned int j = 0; j < 3; ++i) {
-      //     printf("%f ", scores[i * 3 + j]);
-      //   }
-      // }
-      // printf("\r\n");
-
-
-      // TEST: Get results from inference
-      // const float *bboxes, *scores;
-      // bboxes = tflite::GetTensorData<float>(interpreter.output_tensor(0));
-      // scores = tflite::GetTensorData<float>(interpreter.output_tensor(1));
-      
-      // printf("bbox scores: ");
-      // for (unsigned int i = 0; i < 19125; ++i) {
-      //   for (unsigned int j = 0; j < 3; ++j) {
-      //     printf("%f ", scores[i * 3 + j]);
-      //   }
-      //   printf("\r\n");
-      // }
-      // printf("\r\n");
-
-      // ***
       
       // Copy image to separate buffer for HTTP server
 #if ENABLE_HTTP_SERVER
@@ -402,39 +339,42 @@ HttpServer::Content UriHandler(const char* uri) {
       xSemaphoreGive(img_mutex);
     }
 
-    // TEST
-    printf("dtime: %lu\r\n", dtime);
+    // Determine number of bboxes to send
+    size_t num_bboxes = (bbox_list.size() < max_bboxes) ? 
+      bbox_list.size() : max_bboxes; 
 
-    // // Convert results into json string
-    // std::string bbox_string = "{\"dtime\": " + std::to_string(dtime) + ", ";
-    //   bbox_string += "\"bboxes\": [";
-    //   for (const auto& object : results) {
-    //     bbox_string += "{\"id\": " + std::to_string(object.id) + ", ";
-    //     bbox_string += "\"score\": " + std::to_string(object.score) + ", ";
-    //     bbox_string += "\"xmin\": " + std::to_string(object.bbox.xmin) + ", ";
-    //     bbox_string += "\"ymin\": " + std::to_string(object.bbox.ymin) + ", ";
-    //     bbox_string += "\"xmax\": " + std::to_string(object.bbox.xmax) + ", ";
-    //     bbox_string += "\"ymax\": " + std::to_string(object.bbox.ymax) + "}";
-    //     if (&object != &results.back()) {
-    //       bbox_string += ", ";
-    //     }
-    //   }
-    //   bbox_string += "]}";
+    // Convert top k bboxes to JSON string
+    
+    std::string bbox_string = "{\"dtime\": " + std::to_string(dtime) + ", ";
+      bbox_string += "\"bboxes\": [";
+      for (unsigned int i = 0; i < num_bboxes; ++i) {
+        int class_id = static_cast<int>(bbox_list[i][0]);
+        bbox_string += "{\"id\": " + std::to_string(class_id) + ", ";
+        bbox_string += "\"score\": " + std::to_string(bbox_list[i][1]) + ", ";
+        bbox_string += "\"xmin\": " + std::to_string(bbox_list[i][3]) + ", ";
+        bbox_string += "\"ymin\": " + std::to_string(bbox_list[i][2]) + ", ";
+        bbox_string += "\"xmax\": " + std::to_string(bbox_list[i][5]) + ", ";
+        bbox_string += "\"ymax\": " + std::to_string(bbox_list[i][4]) + "}";
+        if (i != num_bboxes - 1) {
+          bbox_string += ", ";
+        }
+      }
+      bbox_string += "]}";
 
-    // // Check length of JSON string
-    // if (bbox_string.length() > bbox_buf_size) {
-    //   printf("ERROR: Bounding box JSON string too long\r\n");
-    //   continue;
-    // }
+    // Check length of JSON string
+    if (bbox_string.length() > bbox_buf_size) {
+      printf("ERROR: Bounding box JSON string too long\r\n");
+      continue;
+    }
 
-    // // Convert global char array
-    // if (xSemaphoreTake(bbox_mutex, portMAX_DELAY) == pdTRUE) {
-    //   std::strcpy(bbox_buf, bbox_string.c_str());
-    //   xSemaphoreGive(bbox_mutex);
-    // }
+    // Convert global char array
+    if (xSemaphoreTake(bbox_mutex, portMAX_DELAY) == pdTRUE) {
+      std::strcpy(bbox_buf, bbox_string.c_str());
+      xSemaphoreGive(bbox_mutex);
+    }
 
-    // // Print bounding box JSON
-    // printf("%s\r\n", bbox_buf);
+    // Print bounding box JSON string
+    printf("%s\r\n", bbox_buf);
 
     // Sleep to let other tasks run
     // vTaskDelay(pdMS_TO_TICKS(10));
@@ -496,7 +436,7 @@ void Main() {
     "InferenceTask",
     configMINIMAL_STACK_SIZE * 30,
     nullptr,
-    kAppTaskPriority - 1, // Console and server are same priority as app, so make inference lower
+    kAppTaskPriority - 1, // Make inference lower than console/server
     nullptr
   );
 
