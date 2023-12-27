@@ -93,7 +93,7 @@ static SemaphoreHandle_t img_mutex;
 static SemaphoreHandle_t bbox_mutex;
 static int img_width;
 static int img_height;
-static constexpr float score_threshold = 0.15f;
+static constexpr float score_threshold = 0.5f;
 static constexpr float iou_threshold = 0.3f;
 static constexpr size_t max_bboxes = 5;
 static constexpr unsigned int bbox_buf_size = 100 + (max_bboxes * 200) + 1;
@@ -329,7 +329,7 @@ HttpServer::Content UriHandler(const char* uri) {
           
           // Only keep boxes above a particular score threshold
           if (scores[i * num_classes + c] > score_threshold_quantized) {
-
+            
             // Calculate anchor box coordinates based on index
             if (!CalculateAnchorBox(i, anchor)) {
               printf("ERROR: Could not calculate anchor box\r\n");
@@ -394,6 +394,13 @@ HttpServer::Content UriHandler(const char* uri) {
       // Unlock critical section
       xSemaphoreGive(img_mutex);
     }
+
+    // Sort bboxes by score
+    std::sort(bbox_list.begin(), bbox_list.end(), 
+      [](const std::vector<float>& a, const std::vector<float>& b) {
+        return a[1] > b[1];
+      }
+    );
 
     // Perform non-maximum suppression
     for (unsigned int i = 0; i < bbox_list.size(); ++i) {
