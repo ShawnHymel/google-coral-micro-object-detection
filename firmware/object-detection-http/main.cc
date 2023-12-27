@@ -33,6 +33,7 @@
 
 #include <cstdio>
 #include <vector>
+#include <cmath>
 
 #include "libs/base/filesystem.h"
 #include "libs/base/http_server.h"
@@ -51,6 +52,8 @@
 #include "third_party/tflite-micro/tensorflow/lite/micro/micro_error_reporter.h"
 #include "third_party/tflite-micro/tensorflow/lite/micro/micro_interpreter.h"
 #include "third_party/tflite-micro/tensorflow/lite/micro/micro_mutable_op_resolver.h"
+
+#include "metadata.h"
 
 #define ENABLE_HTTP_SERVER 1
 #define DEBUG 1
@@ -80,7 +83,7 @@ static SemaphoreHandle_t img_mutex;
 static SemaphoreHandle_t bbox_mutex;
 static int img_width;
 static int img_height;
-static constexpr float bbox_threshold = 0.2;
+static constexpr float score_threshold = 0.5f;
 static constexpr size_t max_bboxes = 5;
 static constexpr unsigned int bbox_buf_size = 100 + (max_bboxes * 200) + 1;
 static char bbox_buf[bbox_buf_size];
@@ -156,8 +159,6 @@ HttpServer::Content UriHandler(const char* uri) {
  */
 [[noreturn]] void InferenceTask(void* param) {
 
-  float score, class_max, ymin, xmin, ymax, xmax;
-
   // Used for calculating FPS
   unsigned long dtime;
   unsigned long timestamp;
@@ -226,7 +227,19 @@ HttpServer::Content UriHandler(const char* uri) {
   unsigned int num_coords = tensor_bboxes->dims->data[2];
   unsigned int num_classes = tensor_scores->dims->data[2];
 
-  // Print output tensor shapes
+  // Get quantization parameters
+  const float input_scale = input_tensor->params.scale;
+  const int input_zero_point = input_tensor->params.zero_point;
+  const float locs_scale = tensor_bboxes->params.scale;
+  const int locs_zero_point = tensor_bboxes->params.zero_point;
+  const float scores_scale = tensor_scores->params.scale;
+  const int scores_zero_point = tensor_scores->params.zero_point;
+
+  // Convert threshold to fixed point
+  uint8_t score_threshold_quantized = 
+    static_cast<uint8_t>(score_threshold * 256);
+
+  // Print input/output details
 #if DEBUG
   printf("num_boxes: %d\r\n", num_boxes);
   printf("num_coords: %d\r\n", num_coords);
@@ -235,10 +248,14 @@ HttpServer::Content UriHandler(const char* uri) {
   if (tensor_scores->data.data == nullptr) {
     printf("tensor_scores.data is empty!\r\n");
   }
+  printf("input_scale: %f\r\n", input_scale);
+  printf("input_zero_point: %d\r\n", input_zero_point);
+  printf("locs_scale: %f\r\n", locs_scale);
+  printf("locs_zero_point: %d\r\n", locs_zero_point);
+  printf("scores_scale: %f\r\n", scores_scale);
+  printf("scores_zero_point: %d\r\n", scores_zero_point);
+  printf("score_threshold_quantized: %d\r\n", score_threshold_quantized);
 #endif
-
-  // Convert threshold to fixed point
-  uint8_t threshold = static_cast<uint8_t>(bbox_threshold * 256);
 
   // Do forever
   while (true) {
@@ -292,39 +309,62 @@ HttpServer::Content UriHandler(const char* uri) {
 
       // Get data
       uint8_t *scores = tensor_scores->data.uint8;
-      uint8_t *bboxes = tensor_bboxes->data.uint8;
-      
-      // Find bounding boxes with scores above threshold
-      for (unsigned int i = 0; i < num_boxes; ++i) {
-        score = -1.0f;
-        class_max = 0.0;
-        for (unsigned int j = 0; j < num_classes; ++j) {
+      uint8_t *raw_boxes = tensor_bboxes->data.uint8;
 
-          // Compare score to threshold and find max score
-          if (scores[i * 3 + j] >= threshold) {
-            if (scores[i * 3 + j] > score) {
-              score = (float)scores[i * 3 + j] * 0.00390625;
-              class_max = (float)j;
+      // Find bounding boxes with scores above threshold
+      for (unsigned int i = 0; i < num_anchors; ++i) {
+        for (unsigned int c = 0; c < num_classes; ++c) {
+          
+          // Only keep boxes above a particular score threshold
+          if (scores[i * num_classes + c] > score_threshold_quantized) {
+
+            // Assume raw box output tensor is given as YXHW format
+            float y_center = raw_boxes[(i * num_coords) + 0];
+            float x_center = raw_boxes[(i * num_coords) + 1];
+            float h = raw_boxes[(i * num_coords) + 2];
+            float w = raw_boxes[(i * num_coords) + 3];
+
+            // De-quantize the output boxes (move to x, y, w, h format)
+            x_center = (x_center - locs_zero_point) * locs_scale;
+            y_center = (y_center - locs_zero_point) * locs_scale;
+            w = (w - locs_zero_point) * locs_scale;
+            h = (h - locs_zero_point) * locs_scale;
+
+            // Scale the output boxes from anchor coordinates
+            x_center = x_center / x_scale * anchors[(i * 4) + 2] + 
+              anchors[(i * 4)];
+            y_center = y_center / y_scale * anchors[(i * 4) + 3] +
+              anchors[(i * 4) + 1];
+            if (apply_exp_scaling) {
+              w = exp(w / w_scale) * anchors[(i * 4) + 2];
+              h = exp(h / h_scale) * anchors[(i * 4) + 3];
+            } else {
+              w = w / w_scale * anchors[(i * 4) + 2];
+              h = h / h_scale * anchors[(i * 4) + 3];
             }
+
+            // Convert box coordinates to top left and bottom right
+            float x_min = x_center - w / 2.0f;
+            float y_min = y_center - h / 2.0f;
+            float x_max = x_center + w / 2.0f;
+            float y_max = y_center + h / 2.0f;
+
+            // Clamp values to between 0 and 1
+            x_min = std::max(std::min(x_min, 1.0f), 0.0f);
+            y_min = std::max(std::min(y_min, 1.0f), 0.0f);
+            x_max = std::max(std::min(x_max, 1.0f), 0.0f);
+            y_max = std::max(std::min(y_max, 1.0f), 0.0f);
+
+            // De-quantize the score
+            float score = (scores[(i * num_classes) + c] - scores_zero_point) *
+              scores_scale;
+
+            // Add to list of bboxes
+            bbox_list.push_back({(float)c, score,
+              y_min, x_min, y_max, x_max});
           }
         }
-
-        // If score is above threshold, add to list of bboxes
-        if (score > 0.0f) {
-          ymin = (float)bboxes[i * 4] * 0.00390625;
-          xmin = (float)bboxes[i * 4 + 1] * 0.00390625;
-          ymax = (float)bboxes[i * 4 + 2] * 0.00390625;
-          xmax = (float)bboxes[i * 4 + 3] * 0.00390625;
-          bbox_list.push_back({class_max, score, ymin, xmin, ymax, xmax});
-        }
       }
-
-      // Sort bboxes by score
-      std::sort(bbox_list.begin(), bbox_list.end(), 
-        [](const std::vector<float>& a, const std::vector<float>& b) {
-          return a[1] > b[1];
-        }
-      );
       
       // Copy image to separate buffer for HTTP server
 #if ENABLE_HTTP_SERVER
@@ -340,14 +380,14 @@ HttpServer::Content UriHandler(const char* uri) {
     }
 
     // Determine number of bboxes to send
-    size_t num_bboxes = (bbox_list.size() < max_bboxes) ? 
+    size_t num_bboxes_output = (bbox_list.size() < max_bboxes) ? 
       bbox_list.size() : max_bboxes; 
 
     // Convert top k bboxes to JSON string
     
     std::string bbox_string = "{\"dtime\": " + std::to_string(dtime) + ", ";
       bbox_string += "\"bboxes\": [";
-      for (unsigned int i = 0; i < num_bboxes; ++i) {
+      for (unsigned int i = 0; i < num_bboxes_output; ++i) {
         int class_id = static_cast<int>(bbox_list[i][0]);
         bbox_string += "{\"id\": " + std::to_string(class_id) + ", ";
         bbox_string += "\"score\": " + std::to_string(bbox_list[i][1]) + ", ";
@@ -355,7 +395,7 @@ HttpServer::Content UriHandler(const char* uri) {
         bbox_string += "\"ymin\": " + std::to_string(bbox_list[i][2]) + ", ";
         bbox_string += "\"xmax\": " + std::to_string(bbox_list[i][5]) + ", ";
         bbox_string += "\"ymax\": " + std::to_string(bbox_list[i][4]) + "}";
-        if (i != num_bboxes - 1) {
+        if (i != num_bboxes_output - 1) {
           bbox_string += ", ";
         }
       }
