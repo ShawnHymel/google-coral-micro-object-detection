@@ -53,7 +53,7 @@
 #include "third_party/tflite-micro/tensorflow/lite/micro/micro_interpreter.h"
 #include "third_party/tflite-micro/tensorflow/lite/micro/micro_mutable_op_resolver.h"
 
-#include "metadata.h"
+#include "metadata.hpp"
 
 #define ENABLE_HTTP_SERVER 1
 #define DEBUG 1
@@ -83,7 +83,7 @@ static SemaphoreHandle_t img_mutex;
 static SemaphoreHandle_t bbox_mutex;
 static int img_width;
 static int img_height;
-static constexpr float score_threshold = 0.5f;
+static constexpr float score_threshold = 0.15f;
 static constexpr size_t max_bboxes = 5;
 static constexpr unsigned int bbox_buf_size = 100 + (max_bboxes * 200) + 1;
 static char bbox_buf[bbox_buf_size];
@@ -98,6 +98,7 @@ static std::vector<uint8_t> *img_copy;
  */
 
 void Blink(unsigned int num, unsigned int delay_ms);
+bool CalculateAnchorBox(unsigned int idx, float *anchor);
 
 #if ENABLE_HTTP_SERVER
 /**
@@ -112,7 +113,7 @@ HttpServer::Content UriHandler(const char* uri) {
 
   // Give client compressed image data
   } else if (StrEndsWith(uri, kCameraStreamUrlPrefix)) {
-    
+
     // Read image from shared memory and compress to JPG
     std::vector<uint8_t> jpeg;
     if (xSemaphoreTake(img_mutex, portMAX_DELAY) == pdTRUE) {
@@ -164,6 +165,9 @@ HttpServer::Content UriHandler(const char* uri) {
   unsigned long timestamp;
   unsigned long timestamp_prev = xTaskGetTickCount() * 
     (1000 / configTICK_RATE_HZ);
+
+  // x_center, y_center, w, h
+  float anchor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
   // Load model
   std::vector<uint8_t> model;
@@ -289,7 +293,7 @@ HttpServer::Content UriHandler(const char* uri) {
       if (!CameraTask::GetSingleton()->GetFrame({fmt})) {
         printf("ERROR: Could not capture frame from camera\r\n");
         continue;
-      }
+      }    
 
       // Turn status LED off to let the user know we're done taking a photo
       LedSet(Led::kUser, false);
@@ -312,11 +316,17 @@ HttpServer::Content UriHandler(const char* uri) {
       uint8_t *raw_boxes = tensor_bboxes->data.uint8;
 
       // Find bounding boxes with scores above threshold
-      for (unsigned int i = 0; i < num_anchors; ++i) {
+      for (unsigned int i = 0; i < metadata::num_anchors; ++i) {
         for (unsigned int c = 0; c < num_classes; ++c) {
           
           // Only keep boxes above a particular score threshold
           if (scores[i * num_classes + c] > score_threshold_quantized) {
+
+            // Calculate anchor box coordinates based on index
+            if (!CalculateAnchorBox(i, anchor)) {
+              printf("ERROR: Could not calculate anchor box\r\n");
+              continue;
+            }
 
             // Assume raw box output tensor is given as YXHW format
             float y_center = raw_boxes[(i * num_coords) + 0];
@@ -331,16 +341,14 @@ HttpServer::Content UriHandler(const char* uri) {
             h = (h - locs_zero_point) * locs_scale;
 
             // Scale the output boxes from anchor coordinates
-            x_center = x_center / x_scale * anchors[(i * 4) + 2] + 
-              anchors[(i * 4)];
-            y_center = y_center / y_scale * anchors[(i * 4) + 3] +
-              anchors[(i * 4) + 1];
-            if (apply_exp_scaling) {
-              w = exp(w / w_scale) * anchors[(i * 4) + 2];
-              h = exp(h / h_scale) * anchors[(i * 4) + 3];
+            x_center = x_center / metadata::x_scale * anchor[2] + anchor[0];
+            y_center = y_center / metadata::y_scale * anchor[3] + anchor[1];
+            if (metadata::apply_exp_scaling) {
+              w = exp(w / metadata::w_scale) * anchor[2];
+              h = exp(h / metadata::h_scale) * anchor[3];
             } else {
-              w = w / w_scale * anchors[(i * 4) + 2];
-              h = h / h_scale * anchors[(i * 4) + 3];
+              w = w / metadata::w_scale * anchor[2];
+              h = h / metadata::h_scale * anchor[3];
             }
 
             // Convert box coordinates to top left and bottom right
@@ -384,7 +392,6 @@ HttpServer::Content UriHandler(const char* uri) {
       bbox_list.size() : max_bboxes; 
 
     // Convert top k bboxes to JSON string
-    
     std::string bbox_string = "{\"dtime\": " + std::to_string(dtime) + ", ";
       bbox_string += "\"bboxes\": [";
       for (unsigned int i = 0; i < num_bboxes_output; ++i) {
@@ -431,6 +438,56 @@ void Blink(unsigned int num, unsigned int delay_ms) {
     coralmicro::LedSet(Led::kStatus, on);
     vTaskDelay(pdMS_TO_TICKS(delay_ms));
   }
+}
+
+/**
+ * Calculate anchor box coordinates based on index and metadata
+ */
+bool CalculateAnchorBox(unsigned int idx, float *anchor) {
+
+  unsigned int sector = 0;
+  float x_idx;
+  float x_center;
+  float y_idx;
+  float y_center;
+  float w;
+  float h;
+
+  // Check index
+  if (idx >= metadata::num_anchors) {
+    return false;
+  }
+
+  // Find the sector that the index belongs in
+  for (unsigned int s = 0; s < metadata::num_sectors; ++s) {
+    if (idx >= metadata::reset_idxs[s]) {
+      sector = s;
+    }
+  }
+
+  // Find the X centert
+  x_idx = (idx % metadata::num_xs_per_y[sector]) / 
+    metadata::num_anchors_per_coord;
+  x_center = (metadata::x_strides[sector] / 2.0f) + 
+    (x_idx * metadata::x_strides[sector]);
+
+  // Find the Y center
+  y_idx = (idx - metadata::reset_idxs[sector]) / 
+    metadata::num_xs_per_y[sector];
+  y_center = (metadata::y_strides[sector] / 2.0f) +
+    (y_idx * metadata::y_strides[sector]);
+
+  // Find the width and height
+  w = metadata::widths[sector][idx % metadata::num_anchors_per_coord];
+  h = metadata::heights[sector][idx % metadata::num_anchors_per_coord];
+
+  // Save anchor box coordinates
+  anchor[0] = x_center;
+  anchor[1] = y_center;
+  anchor[2] = w;
+  anchor[3] = h;
+
+  return true;
 }
 
 /*******************************************************************************
