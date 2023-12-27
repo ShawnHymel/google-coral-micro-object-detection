@@ -61,11 +61,21 @@
 namespace coralmicro {
 namespace {
 
-// Struct
+// Image result struct
 typedef struct {
   std::string info;
   std::vector<uint8_t> *jpeg;
 } ImgResult;
+
+// Bounding box struct
+typedef struct {
+  float id;
+  float score;
+  float ymin;
+  float xmin;
+  float ymax;
+  float xmax;
+} BBox;
 
 // Camera settings
 constexpr auto camRotation = CameraRotation::k270; // Default: CameraRotation::k0
@@ -84,6 +94,7 @@ static SemaphoreHandle_t bbox_mutex;
 static int img_width;
 static int img_height;
 static constexpr float score_threshold = 0.15f;
+static constexpr float iou_threshold = 0.3f;
 static constexpr size_t max_bboxes = 5;
 static constexpr unsigned int bbox_buf_size = 100 + (max_bboxes * 200) + 1;
 static char bbox_buf[bbox_buf_size];
@@ -99,6 +110,7 @@ static std::vector<uint8_t> *img_copy;
 
 void Blink(unsigned int num, unsigned int delay_ms);
 bool CalculateAnchorBox(unsigned int idx, float *anchor);
+float CalculateIOU(BBox *bbox1, BBox *bbox2);
 
 #if ENABLE_HTTP_SERVER
 /**
@@ -219,10 +231,6 @@ HttpServer::Content UriHandler(const char* uri) {
 #if ENABLE_HTTP_SERVER
     img_copy = new std::vector<uint8_t>(img_ptr->size());
 #endif
-
-// #if DEBUG
-//   printf("TensorFlow Lite version: %s\r\n", tflite::GetVersion());
-// #endif
 
   // Get output tensor shapes
   TfLiteTensor* tensor_bboxes = interpreter.output_tensor(0);
@@ -387,6 +395,33 @@ HttpServer::Content UriHandler(const char* uri) {
       xSemaphoreGive(img_mutex);
     }
 
+    // Perform non-maximum suppression
+    for (unsigned int i = 0; i < bbox_list.size(); ++i) {
+      for (unsigned int j = i + 1; j < bbox_list.size(); ++j) {
+        BBox bbox1 = {
+          bbox_list[i][0], 
+          bbox_list[i][1], 
+          bbox_list[i][2], 
+          bbox_list[i][3], 
+          bbox_list[i][4], 
+          bbox_list[i][5]
+        };
+        BBox bbox2 = {
+          bbox_list[j][0], 
+          bbox_list[j][1], 
+          bbox_list[j][2], 
+          bbox_list[j][3], 
+          bbox_list[j][4], 
+          bbox_list[j][5]
+        };
+        float iou = CalculateIOU(&bbox1, &bbox2);
+        if (iou > iou_threshold) {
+          bbox_list.erase(bbox_list.begin() + j);
+          --j;
+        }
+      }
+    }
+
     // Determine number of bboxes to send
     size_t num_bboxes_output = (bbox_list.size() < max_bboxes) ? 
       bbox_list.size() : max_bboxes; 
@@ -488,6 +523,35 @@ bool CalculateAnchorBox(unsigned int idx, float *anchor) {
   anchor[3] = h;
 
   return true;
+}
+
+/**
+ * Calculate intersection over union (IOU) between two bounding boxes
+ */
+float CalculateIOU(BBox *bbox1, BBox *bbox2) {
+
+  // Calculate intersection
+  float x_min = std::max(bbox1->xmin, bbox2->xmin);
+  float y_min = std::max(bbox1->ymin, bbox2->ymin);
+  float x_max = std::min(bbox1->xmax, bbox2->xmax);
+  float y_max = std::min(bbox1->ymax, bbox2->ymax);
+  float intersection = std::max(0.0f, x_max - x_min) * 
+    std::max(0.0f, y_max - y_min);
+
+  // Calculate union
+  float bbox1_area = (bbox1->xmax - bbox1->xmin) * 
+    (bbox1->ymax - bbox1->ymin);
+  float bbox2_area = (bbox2->xmax - bbox2->xmin) * 
+    (bbox2->ymax - bbox2->ymin);
+  float union_area = bbox1_area + bbox2_area - intersection;
+
+  // Calculate IOU
+  float iou = 0.0f;
+  if (union_area > 0.0f) {
+    iou = intersection / union_area;
+  }
+
+  return iou;
 }
 
 /*******************************************************************************
